@@ -73,20 +73,30 @@ class MLayer(nn.Module):
         ])
         
         # Integrators per head
+        # Multi-Scale Initialization (Wormholes)
+        # We store params in a single tensor [heads]
+        scale_vals = []
+        for i in range(heads):
+             # Head 0: dt scale = 1.0 (Fast)
+            # Head k: dt scale = 1.5^k (Slow)
+            scale_init = 1.5 ** i
+            val = torch.tensor(scale_init).log() # Initial bias
+            scale_vals.append(val)
+            
+        self.dt_params = nn.Parameter(torch.tensor(scale_vals))
+        
         self.integrators = nn.ModuleList()
         for i in range(heads):
-            # Learnable DT param (one per head/integrator)
-            self.dt_param = nn.Parameter(torch.tensor(0.5))
-            
-            if integrator_type == 'rk4':
+            # Integrator setup
+             if integrator_type == 'rk4':
                 integ = RK4Integrator(self.christoffels[i], dt=0.1)
-            elif integrator_type == 'heun':
+             elif integrator_type == 'heun':
                 integ = HeunIntegrator(self.christoffels[i], dt=0.1)
-            elif integrator_type == 'leapfrog':
+             elif integrator_type == 'leapfrog':
                 integ = LeapfrogIntegrator(self.christoffels[i], dt=0.1)
-            else:
+             else:
                 integ = SymplecticIntegrator(self.christoffels[i], dt=0.1)
-            self.integrators.append(integ)
+             self.integrators.append(integ)
             
         # Output projection for mixing heads
         if heads > 1:
@@ -134,7 +144,7 @@ class MLayer(nn.Module):
             
             # Integrate with Learnable DT
             # scale = gate * softplus(dt_param) to ensure positive time
-            dt_effective = nn.functional.softplus(self.dt_param) * gate
+            dt_effective = nn.functional.softplus(self.dt_params[i]) * gate
             
             # Pass effective dt via dt_scale (assuming integrator uses dt * scale)
             # Since integrator has base dt=0.1, we scale relative to that.
@@ -205,11 +215,26 @@ class ParallelMLayer(nn.Module):
         # Predict B_t (Input modulation) from input Force
         self.to_B = nn.Linear(dim, dim)
         
-        # Gating for dt (time-dilation)
         self.to_dt = nn.Sequential(
             nn.Linear(dim, dim),
             nn.Softplus()
         )
+        
+        # Parallel Multi-Scale Initialization
+        # We want different channels to have different base time-scales 
+        # to effectively create "Wormholes" in the parallel scan.
+        # Channels 0..HeadDim: Fast
+        # Channels ...: Slow
+        scale_vec = []
+        for i in range(heads):
+            # Scale for this head
+            s = 1.5 ** i
+            # Append s repeated head_dim times
+            scale_vec.extend([s] * (dim // heads))
+        
+        # Register as buffer (fixed base scales, learnable modulation via to_dt)
+        self.register_buffer('base_dt_scales', torch.tensor(scale_vec, dtype=torch.float32))
+        
         self.base_dt = 0.1
         
         # Output projection
@@ -254,7 +279,8 @@ class ParallelMLayer(nn.Module):
         A = self.to_A(force) 
         
         # dt [B, L, D]
-        dt = self.to_dt(force) * self.base_dt
+        # Modulate learned dt by the multi-scale base factors (Wormholes)
+        dt = self.to_dt(force) * self.base_dt * self.base_dt_scales.view(1, 1, -1)
         
         # Apply dt to A? 
         # In discrete form v = (1 - D*dt)v + F*dt

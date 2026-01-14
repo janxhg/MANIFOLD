@@ -24,28 +24,45 @@ class LowRankChristoffel(nn.Module):
         self.U = nn.Parameter(torch.randn(dim, rank) * 0.001)
         self.W = nn.Parameter(torch.randn(dim, rank) * 0.001)
         
-    def forward(self, v):
+        # Position Gate V: dim -> 1 (Scalar gravity well strength)
+        # We start with near-zero weights so initially there are no gravity wells.
+        self.V = nn.Linear(dim, 1, bias=False)
+        nn.init.zeros_(self.V.weight)
+        
+    def forward(self, v, x=None):
         """
         Compute Γ(v, v) = W * (U^T v)^2
         
-        Uses custom CUDA kernel when available for 2-3x speedup.
+        If x is provided, we apply Dynamic Curvature Modulation:
+        Γ_dynamic = Γ_static * (1 + sigmoid(V^T x))
         """
-        # Try CUDA kernel first
-        try:
-            from src.cuda.ops import christoffel_fused
-            # Stability: Tight clamp prevents "exploding" curvature
-            # This is CRITICAL for long-term training stability
-            return torch.clamp(christoffel_fused(v, self.U, self.W), -5.0, 5.0)
-        except:
-            # Fallback to PyTorch
-            # v: [batch, dim]
-            proj = torch.matmul(v, self.U) # [batch, rank]
-            sq = proj * proj # [batch, rank]
-            out = torch.matmul(sq, self.W.t()) # [batch, dim]
+        # Try CUDA kernel first (Only supports static curvature for now)
+        # TODO: Update CUDA kernel to support dynamic curvature
+        # if x is None:
+        #     try:
+        #         from src.cuda.ops import christoffel_fused
+        #         return torch.clamp(christoffel_fused(v, self.U, self.W), -5.0, 5.0)
+        #     except:
+        #         pass
+        
+        # PyTorch Implementation
+        # v: [batch, dim]
+        proj = torch.matmul(v, self.U) # [batch, rank]
+        sq = proj * proj # [batch, rank]
+        out = torch.matmul(sq, self.W.t()) # [batch, dim]
+        
+        # Dynamic Curvature Modulation (Gravity Wells)
+        if x is not None:
+            # V(x) -> scalar modulation
+            # We want deviations from "flat" space to be localized
+            modulation = torch.sigmoid(self.V(x)) # Range (0, 1)
+            # Factor: 1.0 (unchanged) to 2.0 (doubled curvature)
+            # Or we can make it multiplicative: out * (1 + mod)
+            out = out * (1.0 + modulation)
             
-            # Stability: Tight clamp prevents "exploding" curvature
-            # This is CRITICAL for long-term training stability
-            return torch.clamp(out, -5.0, 5.0)
+        # Stability: Tight clamp prevents "exploding" curvature
+        # This is CRITICAL for long-term training stability
+        return torch.clamp(out, -5.0, 5.0)
 
 class SymplecticIntegrator(nn.Module):
     r"""
@@ -71,8 +88,9 @@ class SymplecticIntegrator(nn.Module):
         """
         dt = self.dt * dt_scale
         
+        
         # Acceleration at t
-        gamma_term = self.christoffel(v)
+        gamma_term = self.christoffel(v, x)
         acc_t = -gamma_term
         if force is not None:
             acc_t = acc_t + force
@@ -91,8 +109,8 @@ class SymplecticIntegrator(nn.Module):
         # local metric is predicted or Gamma is computed globally or from hidden state.
         # Let's assume standard GFN where Gamma might be somewhat constant or we just use v_half.
         
-        # Re-eval gamma at new state (if Gamma depended on x, we'd pass x_next)
-        gamma_term_next = self.christoffel(v_half) 
+        # Re-eval gamma at new state (using x_next for dynamic curvature)
+        gamma_term_next = self.christoffel(v_half, x_next) 
         acc_next = -gamma_term_next
         if force is not None:
             # Force might be constant for the step or depend on x (e.g. potential gradient)
@@ -129,31 +147,34 @@ class RK4Integrator(nn.Module):
         """
         dt = self.dt * dt_scale
         
-        def dynamics(current_v):
-            # dv/dt = F - Gamma(v, v)
-            acc = -self.christoffel(current_v)
+        def dynamics(current_x, current_v):
+            # dv/dt = F - Gamma(v, v, x)
+            acc = -self.christoffel(current_v, current_x)
             if force is not None:
                 acc = acc + force
             return acc
             
         # k1
         dx1 = v
-        dv1 = dynamics(v)
+        dv1 = dynamics(x, v)
         
         # k2
         v2 = v + 0.5 * dt * dv1
+        x2 = x + 0.5 * dt * dx1
         dx2 = v2
-        dv2 = dynamics(v2)
+        dv2 = dynamics(x2, v2)
         
         # k3
         v3 = v + 0.5 * dt * dv2
+        x3 = x + 0.5 * dt * dx2
         dx3 = v3
-        dv3 = dynamics(v3)
+        dv3 = dynamics(x3, v3)
         
         # k4
         v4 = v + dt * dv3
+        x4 = x + dt * dx3
         dx4 = v4
-        dv4 = dynamics(v4)
+        dv4 = dynamics(x4, v4)
         
         # Update
         x_next = x + (dt / 6.0) * (dx1 + 2*dx2 + 2*dx3 + dx4)
@@ -175,22 +196,23 @@ class HeunIntegrator(nn.Module):
     def forward(self, x, v, force=None, dt_scale=1.0):
         dt = self.dt * dt_scale
         
-        def dynamics(current_v):
-            acc = -self.christoffel(current_v)
+        def dynamics(current_x, current_v):
+            acc = -self.christoffel(current_v, current_x)
             if force is not None:
                 acc = acc + force
             return acc
             
         # k1
         dx1 = v
-        dv1 = dynamics(v)
+        dv1 = dynamics(x, v)
         
         # Predictor step (Euler)
         v_pred = v + dt * dv1
+        x_pred = x + dt * dx1
         
-        # k2 (using predicted velocity)
+        # k2 (using predicted velocity AND position)
         dx2 = v_pred
-        dv2 = dynamics(v_pred)
+        dv2 = dynamics(x_pred, v_pred)
         
         # Corrector step
         x_next = x + (dt / 2.0) * (dx1 + dx2)
@@ -243,15 +265,19 @@ class LeapfrogIntegrator(nn.Module):
             # Fallback to PyTorch
             effective_dt = self.dt * dt_scale
             
+            # Fallback to PyTorch
+            effective_dt = self.dt * dt_scale
+            
             # Half-step velocity
-            gamma = self.christoffel(v)
+            gamma = self.christoffel(v, x)
             v_half = v + 0.5 * effective_dt * (force - gamma)
             
             # Full-step position
             x_new = x + effective_dt * v_half
             
             # Half-step velocity again
-            gamma_half = self.christoffel(v_half)
+            # Use x_new for new Gamma calculation
+            gamma_half = self.christoffel(v_half, x_new)
             v_new = v_half + 0.5 * effective_dt * (force - gamma_half)
             
             return x_new, v_new

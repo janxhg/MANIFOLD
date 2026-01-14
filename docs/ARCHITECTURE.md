@@ -107,6 +107,21 @@ GFN achieves O(1) memory because:
 
 ---
 
+## Geometric Enhancements (Experimental)
+
+### Dynamic Curvature Fields ($\Gamma(x, v)$)
+Traditional GFN assumes curvature $\Gamma(v)$ depends only on direction. **Dynamic Curvature** introduces position-dependence:
+$$\Gamma(v, x) = \Gamma_{static}(v, v) \cdot (1 + \sigma(V \cdot x))$$
+This creates **Gravity Wells** where specific concepts (positions on the manifold) naturally curve the space, altering trajectories that pass near them (implicit attention).
+
+### Manifold Wormholes (Multi-Scale Time)
+To effect "Isomeric Transport" across long distances (skipping tokens), MANIFOLD uses **Multi-Scale Heads**.
+- **Head 0**: Base $dt$ (Fast flow, handles syntax/local)
+- **Head k**: $dt_k = c^k \cdot dt_0$ (Slow flow, semantic transport)
+
+This implements "Wormholes" in the causal graph, allowing information to propagate from $t$ to $t+N$ in a single effective step on the slow manifold, preserving $O(1)$ memory.
+
+
 ## Component Details
 
 ### 1. Embedding Layer
