@@ -1,0 +1,121 @@
+# GFN Project - Git Ignore
+# =========================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch
+*.pth
+*.pt
+*.ckpt
+
+# Checkpoints (keep config, exclude large files)
+checkpoints/**/*.pt
+checkpoints/**/*.pth
+!checkpoints/**/config.yaml
+!checkpoints/**/train.txt
+
+# Results
+results/
+tests/professional/results/*.png
+tests/professional/results/*.pdf
+tests/professional/results/*.csv
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+.venv_scons/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+logs/
+wandb/
+
+# CUDA compilation artifacts
+*.o
+*.obj
+*.exp
+*.lib
+*.pyd
+*.so
+*.dylib
+.ninja_deps
+.ninja_log
+build.ninja
+
+# PyTorch extensions cache
+~/.cache/torch_extensions/
+
+# SCons
+.sconsign.dblite
+.sconsign.dblite.p*
+.scons_cache/
+*.sconf_temp/
+
+# Build artifacts
+gfn_cuda*.pyd
+gfn_cuda*.so
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Test outputs
+test.txt
+*.tmp
+
+# Large datasets (if any)
+data/raw/
+data/processed/
+*.hdf5
+*.h5
+
+# Secrets and credentials
+.env
+secrets/
+*.key
+*.pem
+
+# Temporary files
+*.bak
+*.swp
+*.tmp
+temp/
+tmp/

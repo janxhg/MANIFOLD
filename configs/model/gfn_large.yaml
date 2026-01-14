@@ -1,0 +1,12 @@
+# GFN Large Model Configuration (50M+ Parameters)
+# For benchmarking and scaling experiments
+
+model:
+  vocab_size: 16
+  dim: 1024
+  depth: 24
+  rank: 256
+  integrator: "leapfrog"
+  use_adjoint: false  # Disabled for Speed (Fits in GTX 1650 4GB)
+
+# Computed: ~56M parameters

@@ -1,0 +1,10 @@
+# Medium GFN Model Configuration
+# Balanced for GTX 1650 (4GB VRAM)
+# Estimated Params: ~4M
+model:
+  vocab_size: 16
+  dim: 512
+  depth: 12
+  rank: 64
+  integrator: "leapfrog"
+  use_adjoint: false  # Disable for Speed (Standard Backprop is faster on small/medium models)

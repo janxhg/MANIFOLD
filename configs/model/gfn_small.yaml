@@ -1,0 +1,12 @@
+# GFN Small Model Configuration (2M Parameters)
+# Optimized for GTX 1650 / Low VRAM
+
+model:
+  vocab_size: 16
+  dim: 256
+  depth: 6
+  rank: 64
+  integrator: "leapfrog"
+  use_adjoint: false
+
+# Computed: ~2M parameters
