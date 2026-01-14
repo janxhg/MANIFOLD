@@ -55,7 +55,16 @@ While MANIFOLD achieves theoretical $O(N)$ time complexity and $O(1)$ VRAM, our 
 As of RC1, the MANIFOLD recurrence is implemented as a sequential Python loop. For a sequence of length 1024 with a depth of 24 layers, the model must launch ~24,000 individual CUDA kernels. The overhead of these launches currently dominates the inference time, resulting in higher latency compared to Transformers which process tokens in a single, massively parallel matrix operation.
 
 ### 6.2 Architectural Dominance at Scale
-The true advantage of MANIFOLD emerges as sequence lengths exceed the "Transformer Memory Wall". While a 50M Transformer OOMs at approximately $L=32,000$ (on 4GB VRAM), MANIFOLD remains functionally identical in memory footprint. **Future Work** involves a dedicated CUDA/Triton kernel for the Riemannian flow to match Mamba's scan efficiency.
+The true advantage of MANIFOLD emerges as sequence lengths exceed the "Transformer Memory Wall". While a 50M Transformer OOMs at approximately $L=32,000$ (on 4GB VRAM), MANIFOLD remains functionally identical in memory footprint. **Update (Jan 2026):** We have successfully implemented a **Parallel Associative Scan** training mode, matching the $O(\log N)$ training efficiency of State Space Models while retaining the continuous manifold formulation.
+
+## 7. Geometric Future Directions (Beyond Attention)
+To enhance expressivity without compromising the "Geodesic Purity" or O(1) memory, we propose the following physics-aligned improvements:
+
+### 7.1 Dynamic Curvature Fields (General Relativity)
+Currently, $\Gamma(v)$ depends only on velocity. We propose evolving to $\Gamma(x, v)$, where the curvature of the manifold changes based on the *position* in the latent space (semantic context). This effectively creates "gravity wells" around key concepts, allowing the model to naturally "orbit" or focus on important memories without storing them explicitly.
+
+### 7.2 Manifold Wormholes (Topology Change)
+Instead of global attention (which breaks the manifold structure), we introduce **Wormholes**: non-local geometric connections that connect distant points on the manifold. Mathematically modeled as Einstein-Rosen bridges, these would allow information to tunnel between disparate timeline points while preserving local isometry, solving the "Associative Recall" problem physically.
 
 ## 7. Comparison Table
 
@@ -70,4 +79,4 @@ The true advantage of MANIFOLD emerges as sequence lengths exceed the "Transform
 MANIFOLD represents a paradigm shift in how we model sequence dependencies. By moving from attention-based retrieval to geometric transport, we unlock the potential for truly infinite context limits and more robust, physics-informed reasoning. The architecture's foundation in differential geometry provides both theoretical elegance and practical advantages for next-generation AI systems.
 
 ---
-© 2026 MANIFOLD Research Group. Distributed under MIT License.
+© 2026 MANIFOLD Research Group. Licensed under Apache License 2.0.

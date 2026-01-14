@@ -12,7 +12,7 @@ def run_suite():
     print("      GFN PROFESSIONAL TEST SUITE (v2.0)")
     print("=" * 70)
     print("\nFor comprehensive report with visualizations, run:")
-    print("  python tests/professional/generate_report.py --checkpoint your_model.pt")
+    print("  python tests/benchmarks/generate_report.py --checkpoint your_model.pt")
     print("\n" + "=" * 70)
     
     loader = unittest.TestLoader()
@@ -24,6 +24,8 @@ def run_suite():
     
     # Unit Tests
     suite.addTests(loader.discover(start_dir + '/unit', pattern='test_*.py'))
+    suite.addTests(loader.discover(start_dir + '/integration', pattern='test_*.py'))
+    suite.addTests(loader.discover(start_dir + '/physics', pattern='test_*.py'))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
@@ -38,9 +40,7 @@ def run_suite():
     import subprocess
     
     scripts = [
-        ("tests/physics/test_mechanics.py", "Physics Mechanics Verification"),
-        ("tests/stability/test_gradients.py", "Gradient Stability (Deep Network)"),
-        ("tests/diagnosis/overfit_batch.py", "Overfit Diagnosis (Sanity Check)")
+        ("tests/integration/test_overfit_sanity.py", "Overfit Diagnosis (Sanity Check)")
     ]
     
     print("\n" + "=" * 70)
@@ -88,8 +88,8 @@ def run_suite():
     print("\n" + "=" * 70)
     if all_passed and result.wasSuccessful():
         print("✅ [ALL PASSED] CORE TESTS VERIFIED")
-        print("\n💡 TIP: Run professional tests for detailed analysis:")
-        print("   python tests/professional/generate_report.py")
+        print("\n💡 TIP: Run benchmarks for detailed analysis:")
+        print("   python tests/benchmarks/generate_report.py")
     else:
         print("❌ [FAILED] SOME TESTS FAILED")
         sys.exit(1)

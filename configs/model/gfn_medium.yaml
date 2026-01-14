@@ -6,5 +6,7 @@ model:
   dim: 512
   depth: 12
   rank: 64
+  heads: 8    # Multi-Head Manifold
   integrator: "leapfrog"
+  use_scan: true
   use_adjoint: false  # Disable for Speed (Standard Backprop is faster on small/medium models)

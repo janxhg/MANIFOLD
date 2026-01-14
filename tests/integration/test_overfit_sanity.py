@@ -5,7 +5,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import GFN
+from src.model import Manifold
 from src.losses import GFNLoss
 from src.optim import RiemannianAdam
 
@@ -18,9 +18,10 @@ def test_overfit_rtx_config():
     dim = 256 # Reduced slightly for speed in test, but deep enough to break if broken
     depth = 12
     rank = 64
+    heads = 4
     
-    print(f"Initializing Model (dim={dim}, depth={depth})...")
-    model = GFN(vocab_size, dim, depth, rank, integrator_type='leapfrog').to(device)
+    print(f"Initializing Model (dim={dim}, depth={depth}, heads={heads})...")
+    model = Manifold(vocab_size, dim, depth, rank, heads=heads, integrator_type='leapfrog').to(device)
     optimizer = RiemannianAdam(model.parameters(), lr=1e-3)
     criterion = GFNLoss(lambda_h=0.01)
     

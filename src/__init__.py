@@ -24,11 +24,14 @@ __version__ = "2.0.0"
 __author__ = "GFN Research Group"
 
 # Core Model
-from .model import GFN
-from .adjoint import AdjointGFN
+from .model import Manifold as GFN  # Alias for backward compatibility
+from .model import Manifold
+from .adjoint import AdjointManifold as AdjointGFN
+from .adjoint import AdjointManifold
 
 # Layers
-from .layers import GLayer, RiemannianGating
+from .layers import MLayer as GLayer  # Alias
+from .layers import MLayer, ParallelMLayer, RiemannianGating
 
 # Geometry - All integrators
 from .geometry import (

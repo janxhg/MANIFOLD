@@ -1,54 +1,76 @@
 import torch
 import torch.nn as nn
-from .layers import GLayer
+from .layers import MLayer, ParallelMLayer
 
 
-class GFN(nn.Module):
+class Manifold(nn.Module):
     """
-    Geodesic Flow Network (GFN)
+    MANIFOLD: Multi-scale Adaptive Neural Inference via Flow On Learned Dynamics
     
     A sequence model that evolves hidden states as geodesic flows
     on a Riemannian manifold. Achieves O(1) memory complexity.
     
     Architecture:
         1. Embedding: Token -> Force impulse on manifold
-        2. Dynamics: G-Layers evolve state (x, v) via geodesic flow
+        2. Dynamics: M-Layers evolve state (x, v) via geodesic flow
         3. Readout: Position x -> Logits via learned projection
     
     Args:
         vocab_size: Size of vocabulary
         dim: Hidden dimension (default: 256)
-        depth: Number of G-Layers (default: 4)
+        depth: Number of M-Layers (default: 4)
         rank: Low-rank Christoffel approximation (default: 32)
+        heads: Number of independent geodesic heads (default: 4)
         integrator_type: 'heun', 'rk4', or 'symplectic' (default: 'heun')
     
     Example:
-        >>> model = GFN(vocab_size=16, dim=512, depth=12, integrator_type='heun')
+        >>> model = Manifold(vocab_size=16, dim=512, depth=12, integrator_type='heun')
         >>> logits, state = model(input_ids)
     """
     
-    def __init__(self, vocab_size, dim=256, depth=4, rank=32, integrator_type='heun'):
+    def __init__(self, vocab_size, dim=256, depth=4, rank=32, heads=4, integrator_type='heun', use_scan=False):
         super().__init__()
         self.dim = dim
         self.depth = depth
+        self.heads = heads
         self.integrator_type = integrator_type
+        self.use_scan = use_scan
         
-        # Token embedding (acts as "force" on the manifold)
+        # Token embedding
         self.embedding = nn.Embedding(vocab_size, dim)
         
-        # Stack of Geodesic Layers
-        self.layers = nn.ModuleList([
-            GLayer(dim, rank=rank, integrator_type=integrator_type) 
-            for _ in range(depth)
-        ])
+        # Stack of Multi-Head Manifold Layers
+        print(f"🚀 MANIFOLD Init: {depth} layers, {heads} heads, {dim} dim, {integrator_type}, scan={use_scan}")
+        
+        self.layers = nn.ModuleList()
+        for _ in range(depth):
+            if use_scan:
+                self.layers.append(ParallelMLayer(dim, heads=heads))
+            else:
+                self.layers.append(MLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type))
         
         # Output projection
         self.readout_norm = nn.LayerNorm(dim)
         self.readout = nn.Linear(dim, vocab_size)
         
-        # Learnable initial state (position and velocity)
-        self.x0 = nn.Parameter(torch.zeros(1, dim))
-        self.v0 = nn.Parameter(torch.zeros(1, dim))
+        # Improved Initialization (Critical for convergence)
+        # Non-zero random init helps early gradient flow
+        self.x0 = nn.Parameter(torch.randn(1, dim) * 0.02)
+        self.v0 = nn.Parameter(torch.randn(1, dim) * 0.01)
+
+        # Init weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.zeros_(module.bias)
+            nn.init.ones_(module.weight)
     
     def forward(self, input_ids, attention_mask=None, state=None):
         """
@@ -75,35 +97,80 @@ class GFN(nn.Module):
         # Pre-compute all token embeddings (forces)
         all_forces = self.embedding(input_ids)  # [batch, seq_len, dim]
         
-        # Prepare attention mask
-        if attention_mask is not None:
-            mask = attention_mask.unsqueeze(-1).float()  # [batch, seq_len, 1]
-        else:
-            mask = torch.ones(batch_size, seq_len, 1, device=input_ids.device)
-        
-        # Process sequence token by token (recurrent dynamics)
-        logits_list = []
-        
-        for t in range(seq_len):
-            # Get force for current timestep
-            force = all_forces[:, t]  # [batch, dim]
+        if self.use_scan:
+            # === PARALLEL MODE (SCAN) ===
+            # Process entire sequence at once
             
-            # Apply mask (zero force for padding tokens)
-            force = force * mask[:, t]
+            # Initial states (broadcast to batch)
+            x = self.x0.expand(batch_size, seq_len, -1) # Wait, x0 is purely initial. 
+            # In scan, x evolves. We pass 'x' through layers? 
+            # In MLayer 'x' is input state.
+            # But ParallelMLayer takes 'force' sequence and generates (x,v) sequence.
+            # It's a bit different. The 'force' for layer L comes from readout of layer L-1?
+            # Standard ResNet/Transformer: x_{l+1} = Layer(x_l)
+            # Here: (x, v) = Layer(x, v, force)
+            # For Parallel, we treat the input to the layer as the "Force" driving the flow.
+            # So: Force_0 = Embedding(tokens)
+            # (x_1, v_1) = Layer_1(Force_0)  <-- Parallel Scan
+            # Force_1 = Projection(x_1) ?? Or just pass x_1 as force to next layer?
+            # Let's say the conceptual "Force" for layer L is the output state 'x' of layer L-1.
             
-            # Evolve state through all G-Layers
+            curr_input = all_forces # [B, L, D]
+            
+            # Initial x, v for residual connections?
+            # ParallelMLayer integrates from 0. We can add x0 offset at the end.
+            
             for layer in self.layers:
-                x, v = layer(x, v, force)
+                # Parallel Layer takes full sequence of inputs
+                # We treat the input 'curr_input' as the driving force sequence
+                out_x, out_v = layer(None, None, force=curr_input)
+                
+                # Update input for next layer (stacking manifold layers)
+                # Next layer is driven by the position/state of previous layer
+                curr_input = out_x # Use position as input to next layer
+                
+            # Final Readout
+            # [batch, seq_len, dim]
+            x_final = curr_input 
+            out = self.readout_norm(x_final)
+            logits = self.readout(out) # [batch, seq_len, vocab_size]
             
-            # Readout: project position to vocabulary logits
-            out = self.readout_norm(x)
-            logit = self.readout(out)  # [batch, vocab_size]
-            logits_list.append(logit.unsqueeze(1))
-        
-        # Stack all logits
-        logits = torch.cat(logits_list, dim=1)  # [batch, seq_len, vocab_size]
-        
-        return logits, (x, v)
+            # Return last state for compatibility?
+            # Just return zeros or last element
+            return logits, (x_final[:, -1], None)
+
+        else:
+            # === SEQUENTIAL MODE (LOOP) ===
+            # Prepare attention mask
+            if attention_mask is not None:
+                mask = attention_mask.unsqueeze(-1).float()  # [batch, seq_len, 1]
+            else:
+                mask = torch.ones(batch_size, seq_len, 1, device=input_ids.device)
+            
+            # Process sequence token by token (recurrent dynamics)
+            logits_list = []
+            
+            for t in range(seq_len):
+                # Get force for current timestep
+                force = all_forces[:, t]  # [batch, dim]
+                
+                # Apply mask (zero force for padding tokens)
+                force = force * mask[:, t]
+                
+                # Evolve state through all M-Layers
+                for layer in self.layers:
+                    # Update state: x_{l+1}, v_{l+1} = layer(x_l, v_l, force)
+                    x, v = layer(x, v, force)
+                
+                # Readout: project position to vocabulary logits
+                out = self.readout_norm(x)
+                logit = self.readout(out)  # [batch, vocab_size]
+                logits_list.append(logit.unsqueeze(1))
+            
+            # Stack all logits
+            logits = torch.cat(logits_list, dim=1)  # [batch, seq_len, vocab_size]
+            
+            return logits, (x, v)
     
     def generate(self, prompt_ids, max_new_tokens=50, temperature=1.0, top_k=None, top_p=None):
         """

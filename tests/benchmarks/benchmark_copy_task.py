@@ -46,7 +46,8 @@ def train_and_compare_quick():
     seq_len = 8
     
     # BALANCED parameter count by making GFN much bigger
-    gfn = GFN(vocab_size=vocab_size, dim=512, depth=12, rank=64).to(device)
+    # Using 4 heads and deep network
+    gfn = GFN(vocab_size=vocab_size, dim=512, depth=12, rank=64, heads=8).to(device)
     gpt = MicroGPT(vocab_size=vocab_size, dim=192, depth=6, heads=4).to(device)
     
     gfn_params = sum(p.numel() for p in gfn.parameters()) / 1e6

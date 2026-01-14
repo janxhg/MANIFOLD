@@ -2,7 +2,7 @@
 
 MANIFOLD/
 ├── README.md                  # Main documentation
-├── LICENSE                    # MIT License
+├── LICENSE                    # Apache License 2.0
 ├── BRAND.md                   # Brand guidelines
 ├── CONTRIBUTING.md            # Contribution guide
 ├── requirements.txt           # Python dependencies

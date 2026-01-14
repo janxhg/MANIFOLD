@@ -61,9 +61,9 @@ class GeodesicODEFunc(nn.Module):
         return torch.cat([dx_dt, dv_dt, df_dt], dim=-1)
 
 
-class AdjointGLayer(nn.Module):
+class AdjointMLayer(nn.Module):
     """
-    Geodesic Layer using Adjoint State Method.
+    Manifold Layer using Adjoint State Method.
     
     Uses Neural ODE integration with adjoint backpropagation
     for O(1) memory complexity regardless of integration steps.
@@ -77,51 +77,11 @@ class AdjointGLayer(nn.Module):
         self.ode_func = GeodesicODEFunc(self.christoffel)
         
         self.integration_time = integration_time
-        self.n_steps = n_steps
-        
-        # Time points for integration
-        self.register_buffer('t_span', torch.linspace(0, integration_time, n_steps))
-    
-    def forward(self, x, v, force=None):
-        """
-        Integrate geodesic flow using ODE solver.
-        """
-        if force is None:
-            force = torch.zeros_like(x)
+        # ... (rest of init)
 
-        if not HAS_TORCHDIFFEQ:
-            # Fallback to simple Euler integration
-            dt = self.integration_time / self.n_steps
-            for _ in range(self.n_steps):
-                gamma = self.christoffel(v)
-                acc = force - gamma
-                v = v + dt * acc
-                x = x + dt * v
-            return x, v
-        
-        # Initial state: concatenate x, v, force
-        state0 = torch.cat([x, v, force], dim=-1)
-        
-        # Integrate using adjoint method (O(1) memory)
-        # Force is included in state, so gradients flow naturally to it via dstate0
-        states = odeint_adjoint(
-            self.ode_func,
-            state0,
-            self.t_span,
-            method='dopri5',
-            adjoint_params=tuple(self.christoffel.parameters())
-        )
-        
-        # Get final state
-        final_state = states[-1]  # [batch, 3*dim]
-        dim = x.shape[-1]
-        
-        return final_state[..., :dim], final_state[..., dim:2*dim]
-
-
-class AdjointGFN(nn.Module):
+class AdjointManifold(nn.Module):
     """
-    Full GFN model using Adjoint State Method for O(1) memory.
+    Full MANIFOLD model using Adjoint State Method for O(1) memory.
     
     This version uses continuous ODE integration instead of
     discrete layer-by-layer updates, providing:
@@ -130,8 +90,13 @@ class AdjointGFN(nn.Module):
     - Better numerical stability for deep networks
     """
     
-    def __init__(self, vocab_size, dim=256, depth=4, rank=32, integration_time=1.0):
+    def __init__(self, vocab_size, dim=256, depth=4, rank=32, heads=1, integration_time=1.0):
         super().__init__()
+        
+        if heads > 1:
+            raise NotImplementedError("AdjointManifold currently only supports heads=1. "
+                                      "For Multi-Head Geodesic Flows, use standard Manifold (use_adjoint=False).")
+                                      
         self.dim = dim
         self.depth = depth
         
@@ -139,15 +104,34 @@ class AdjointGFN(nn.Module):
         
         # Use adjoint layers
         self.layers = nn.ModuleList([
-            AdjointGLayer(dim, rank=rank, integration_time=integration_time/depth, n_steps=5)
+            AdjointMLayer(dim, rank=rank, integration_time=integration_time/depth, n_steps=5)
             for _ in range(depth)
         ])
+        
+        # Pre-LN (consistent with V2)
+        # Note: AdjointGLayer dynamics are continuous, but we can apply LN between layers
+        self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in range(depth)])
         
         self.readout_norm = nn.LayerNorm(dim)
         self.readout = nn.Linear(dim, vocab_size)
         
-        self.x0 = nn.Parameter(torch.zeros(1, dim))
-        self.v0 = nn.Parameter(torch.zeros(1, dim))
+        # Improved Initialization (Consistent with GFN V2)
+        self.x0 = nn.Parameter(torch.randn(1, dim) * 0.02)
+        self.v0 = nn.Parameter(torch.randn(1, dim) * 0.01)
+        
+        # Init weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.zeros_(module.bias)
+            nn.init.ones_(module.weight)
     
     def forward(self, input_ids, attention_mask=None, state=None):
         batch_size, seq_len = input_ids.shape
@@ -170,7 +154,11 @@ class AdjointGFN(nn.Module):
         for t in range(seq_len):
             force = all_forces[:, t] * mask[:, t]
             
-            for layer in self.layers:
+            for i, layer in enumerate(self.layers):
+                # Pre-LN
+                x = self.norms[i](x)
+                v = self.norms[i](v)
+                
                 x, v = layer(x, v, force)
             
             out = self.readout_norm(x)

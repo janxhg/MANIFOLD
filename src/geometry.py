@@ -19,8 +19,10 @@ class LowRankChristoffel(nn.Module):
         # Factors to reconstruct Gamma
         # U: [dim, rank] - represents the "basis" for the input indices i, j
         # W: [dim, rank] - represents the "basis" for the output index k (or weighting)
-        self.U = nn.Parameter(torch.randn(dim, rank) * 0.02)
-        self.W = nn.Parameter(torch.randn(dim, rank) * 0.02)
+        # Init very small to start with FLAT manifold (Euclidean geometry)
+        # This helps in preserving long-term dependencies (linear dynamics)
+        self.U = nn.Parameter(torch.randn(dim, rank) * 0.001)
+        self.W = nn.Parameter(torch.randn(dim, rank) * 0.001)
         
     def forward(self, v):
         """

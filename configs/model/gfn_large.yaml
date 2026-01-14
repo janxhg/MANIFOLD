@@ -6,7 +6,9 @@ model:
   dim: 1024
   depth: 24
   rank: 256
+  heads: 16   # Multi-Head Manifold
   integrator: "leapfrog"
-  use_adjoint: false  # Disabled for Speed (Fits in GTX 1650 4GB)
+  use_scan: true
+  use_adjoint: false  # Disabled for Speed
 
 # Computed: ~56M parameters

@@ -7,11 +7,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import GFN
-from src.adjoint import AdjointGFN
+from src.model import Manifold
+from src.adjoint import AdjointManifold
 
 def test_mechanics():
-    print("=== GFN MECHANICS VERIFICATION ===")
+    print("=== MANIFOLD MECHANICS VERIFICATION ===")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
     
@@ -20,19 +20,20 @@ def test_mechanics():
     dim = 16
     depth = 2
     rank = 4
+    heads = 4
     bs = 2
     seq_len = 5
     
-    print(f"\n[1] Initializing Tiny GFN (dim={dim}, depth={depth})...")
+    print(f"\n[1] Initializing Tiny Manifold (dim={dim}, depth={depth}, heads={heads})...")
     
     # Set seed for identical initialization
     torch.manual_seed(42)
-    # Standard GFN
-    model_std = GFN(vocab_size, dim, depth, rank, integrator_type='leapfrog').to(device)
+    # Standard Manifold
+    model_std = Manifold(vocab_size, dim, depth, rank, heads=heads, integrator_type='leapfrog').to(device)
     
     torch.manual_seed(42)
-    # Adjoint GFN
-    model_adj = AdjointGFN(vocab_size, dim, depth, rank).to(device)
+    # Adjoint Manifold (Heads=1 required)
+    model_adj = AdjointManifold(vocab_size, dim, depth, rank, heads=1).to(device)
     
     # Dummy Input
     x = torch.randint(0, vocab_size, (bs, seq_len)).to(device)
@@ -55,12 +56,11 @@ def test_mechanics():
         import torchdiffeq
         model_adj.zero_grad()
         # Enable gradient checkpointing/adjoint logic implicit in the module if implemented
-        # Note: In our implementation, AdjointGFN uses torchdiffeq.odeint_adjoint
+        # Note: In our implementation, AdjointManifold uses torchdiffeq.odeint_adjoint
         logits_adj, _ = model_adj(x)
         loss_adj = criterion(logits_adj.view(-1, vocab_size), target.view(-1))
         loss_adj.backward()
         grad_adj = model_adj.embedding.weight.grad.clone()
-        print(f"    Adjoint Loss:  {loss_adj.item():.6f}")
         print(f"    Adjoint Loss:  {loss_adj.item():.6f}")
         print(f"    Gradient Norm: {grad_adj.norm().item():.6f}")
             
@@ -80,23 +80,25 @@ def test_mechanics():
 
     # 5. Energy Conservation Test
     print("\n[5] Energy Conservation Test...")
-    # Get a single GLayer from Standard model
+    # Get a single MLayer from Standard model
     layer = model_std.layers[0]
-    q = torch.randn(bs, dim).to(device)
-    p = torch.randn(bs, dim).to(device)
-    gate = torch.ones(bs, 1).to(device)
+    
+    # Access the FIRST head's integrator
+    integrator = layer.integrators[0]
+    head_dim = dim // heads
+    
+    q = torch.randn(bs, head_dim).to(device)
+    p = torch.randn(bs, head_dim).to(device)
     
     # Calculate Energy: Kinetic = ||p||^2
     E_start = p.pow(2).sum(dim=-1).mean()
     
     # Evolve using Integrator
-    # We need to manually call the integrator since GLayer wrapper adds gate logic
-    # But layer.integrator is the pure physics stepper.
-    q_new, p_new = layer.integrator(q, p, dim) # Force is dim? No, force is embedding.
-    # Wait, integrator signature: (x, v, force)
-    force = torch.zeros(bs, dim).to(device) 
+    # Integrator signature: (x, v, force, dt_scale)
+    # We pass 0 force and dt_scale=1.0 for conservation check
+    force = torch.zeros(bs, head_dim).to(device) 
     
-    q_new, p_new = layer.integrator(q, p, force)
+    q_new, p_new = integrator(q, p, force, dt_scale=1.0)
     
     E_end = p_new.pow(2).sum(dim=-1).mean()
     energy_diff = torch.abs(E_start - E_end).item()

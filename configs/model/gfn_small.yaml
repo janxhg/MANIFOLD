@@ -6,7 +6,9 @@ model:
   dim: 256
   depth: 6
   rank: 64
+  heads: 4
   integrator: "leapfrog"
+  use_scan: true
   use_adjoint: false
 
 # Computed: ~2M parameters

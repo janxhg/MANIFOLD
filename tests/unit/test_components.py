@@ -7,12 +7,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.layers import GLayer, RiemannianGating
-from src.model import GFN
+from src.layers import MLayer, RiemannianGating
+from src.model import Manifold
 from src.optim import RiemannianAdam
 from src.losses import GFNLoss
 
-class TestGFNComponents(unittest.TestCase):
+class TestManifoldComponents(unittest.TestCase):
     def setUp(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.manual_seed(42)
@@ -22,19 +22,18 @@ class TestGFNComponents(unittest.TestCase):
         dim = 32
         gate = RiemannianGating(dim).to(self.device)
         u = torch.randn(8, dim).to(self.device) # u (position)
-        # v = torch.randn(8, dim).to(self.device) # v (velocity) - Unused by RiemannianGating?
         
-        # RiemannianGating only takes x (u). forward(self, x).
         out = gate(u)
         
         self.assertEqual(out.shape, (8, 1))
         self.assertTrue(torch.all(out >= 0.0), "Gate output negative")
         self.assertTrue(torch.all(out <= 1.0), "Gate output > 1.0")
 
-    def test_glayer_shapes(self):
-        """Test Geodesic Layer IO shapes."""
+    def test_mlayer_shapes(self):
+        """Test Manifold Layer IO shapes."""
         dim = 32
-        layer = GLayer(dim, rank=8).to(self.device)
+        heads = 4
+        layer = MLayer(dim, heads=heads, rank=8).to(self.device)
         
         start_u = torch.randn(4, dim).to(self.device)
         start_v = torch.randn(4, dim).to(self.device)
@@ -53,7 +52,7 @@ class TestGFNComponents(unittest.TestCase):
         """Test Full Model Forward Pass."""
         vocab = 10
         dim = 16
-        model = GFN(vocab, dim, depth=2, rank=4).to(self.device)
+        model = Manifold(vocab, dim, depth=2, rank=4, heads=2).to(self.device)
         
         bs = 2
         seq = 5

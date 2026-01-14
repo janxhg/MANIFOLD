@@ -24,46 +24,36 @@ import sys
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src import GFN, GFNLoss, RiemannianAdam
+from src import Manifold, GFNLoss, RiemannianAdam
 from src.math_dataset import MathDataset
 from src.safety import GPUMonitor
 
 
+
 def load_config(path: str) -> dict:
-    """Load YAML configuration file."""
+    """Load YAML configuration."""
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
 
-def merge_configs(model_cfg: dict, train_cfg: dict, hw_cfg: dict) -> dict:
-    """Merge all configs into a single namespace."""
-    return {**model_cfg, **train_cfg, **hw_cfg}
-
-
 def setup_device(hw_cfg: dict) -> torch.device:
-    """Configure device and optimizations."""
-    device = torch.device(hw_cfg['hardware']['device'] if torch.cuda.is_available() else 'cpu')
-    
-    if device.type == 'cuda':
-        if hw_cfg['hardware'].get('tf32_enabled', False):
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-        if hw_cfg['hardware'].get('cudnn_benchmark', False):
-            torch.backends.cudnn.benchmark = True
-            
-    return device
+    """Setup compute device based on config."""
+    cfg = hw_cfg.get('hardware', {})
+    if torch.cuda.is_available() and cfg.get('gpu_enabled', True):
+        return torch.device('cuda')
+    return torch.device('cpu')
 
 
 def build_model(model_cfg: dict, device: torch.device) -> nn.Module:
-    """Instantiate GFN model from config."""
+    """Instantiate Manifold model from config."""
     cfg = model_cfg['model']
     
     # Check if we should use the O(1) memory Adjoint version
     if cfg.get('use_adjoint', False):
-        from src.adjoint import AdjointGFN, HAS_TORCHDIFFEQ
+        from src.adjoint import AdjointManifold, HAS_TORCHDIFFEQ
         if HAS_TORCHDIFFEQ:
-            print("Initializing AdjointGFN (O(1) Memory Mode)")
-            model = AdjointGFN(
+            print("Initializing AdjointManifold (O(1) Memory Mode)")
+            model = AdjointManifold(
                 vocab_size=cfg['vocab_size'],
                 dim=cfg['dim'],
                 depth=cfg['depth'],
@@ -71,15 +61,17 @@ def build_model(model_cfg: dict, device: torch.device) -> nn.Module:
             )
             return model.to(device)
         else:
-            print("Warning: use_adjoint=True but torchdiffeq missing. Falling back to Standard GFN.")
+            print("Warning: use_adjoint=True but torchdiffeq missing. Falling back to Standard Manifold.")
 
-    print("Initializing Standard GFN (Leapfrog/Discrete Mode)")
-    model = GFN(
+    print("Initializing Standard Manifold (Leapfrog/Discrete Mode)")
+    model = Manifold(
         vocab_size=cfg['vocab_size'],
         dim=cfg['dim'],
         depth=cfg['depth'],
         rank=cfg['rank'],
-        integrator_type=cfg.get('integrator', 'leapfrog')  # Default to best integrator
+        heads=cfg.get('heads', 4),
+        integrator_type=cfg.get('integrator', 'leapfrog'),
+        use_scan=cfg.get('use_scan', True) # Default to True for speed if not specified!
     )
     return model.to(device)
 
