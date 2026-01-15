@@ -168,10 +168,11 @@ def train(model_cfg: dict, train_cfg: dict, hw_cfg: dict):
         max_norm=10.0
     )
     
-    # Loss: GFNLoss with Hamiltonian regularization & Curiosity
+    # Loss: GFNLoss with Hamiltonian regularization, Curiosity & Noether
     criterion = GFNLoss(
         lambda_h=train_params.get('lambda_h', 0.01),  # Hamiltonian energy conservation weight
         lambda_c=train_params.get('lambda_c', 0.0),   # Entropy-Driven Curiosity (Thermodynamics)
+        lambda_n=train_params.get('lambda_n', 0.0),   # Semantic Symmetries (Noether)
         ignore_index=dataset.char_to_id['<PAD>']
     )
     
@@ -239,13 +240,20 @@ def train(model_cfg: dict, train_cfg: dict, hw_cfg: dict):
                 # Forward
                 if scaler:
                     with torch.amp.autocast('cuda'):
-                        logits, (x_final, v_final) = model(inputs)
+                        # Forward
+                        logits, (x_final, v_final), christoffel_outputs = model(inputs)
                         
-                        # Use GFNLoss with Hamiltonian regularization
+                        # Get isomeric groups for Noether loss (v0.7.0)
+                        sym_cfg = model.physics_config.get('symmetries', {})
+                        iso_groups = sym_cfg.get('isomeric_groups', None)
+
+                        # Use GFNLoss with Hamiltonian, Geodesic, Curiosity and Noether regularization
                         loss, loss_dict = criterion(
                             logits, 
                             targets, 
-                            velocities=[v_final]  # Pass final velocity for energy tracking
+                            velocities=[v_final],  # Pass final velocity for energy tracking
+                            christoffel_outputs=christoffel_outputs,
+                            isomeric_groups=iso_groups
                         )
                         
                         if torch.isnan(loss):

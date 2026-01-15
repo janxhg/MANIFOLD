@@ -20,6 +20,7 @@ training:
   max_grad_norm: 1.0
   lambda_h: 0.01         # Hamiltonian Energy Conservation
   lambda_c: 0.05         # Entropy-Driven Curiosity
+  lambda_n: 0.01         # Semantic Symmetries (Noether)
 
   epochs: 1000             # Increased epochs for full convergence
   steps_per_epoch: 1000

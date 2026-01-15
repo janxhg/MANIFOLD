@@ -2,6 +2,19 @@
 
 All notable changes to the MANIFOLD project will be documented in this file.
 
+## [v0.7.0] - Semantic Symmetries (Noether)
+**"The Invariance Update"** - Enforcing geometric consistency across semantic contexts.
+
+### Core Features
+- **Isomeric Heads**: Implemented hard weight sharing in `MLayer`. Multiple manifold subspaces can now share identical geometric laws (Metric Invariance).
+- **Noether Loss**: Added a new symmetry regularization term in `src/losses.py` that penalizes geometric divergence between supposedly isomeric subspaces.
+- **Manifold Metadata Export**: Refactored the forward pass of `MLayer` and `Manifold` to export latent geometric outputs (Christoffel symbols) for global loss computation.
+
+### Verified
+- **Symmetry Test Suite**: Passing `tests/unit/test_symmetries.py` (Weight sharing and Noether loss consistency).
+
+---
+
 ## [v0.6.0] - Thermodynamics (Entropy-Driven Curiosity)
 **"The Life Force"** - Implementing the first pilar of v1.0 by introducing intrinsic cognitive motivation.
 

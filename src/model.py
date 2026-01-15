@@ -120,14 +120,13 @@ class Manifold(nn.Module):
             # Let's say the conceptual "Force" for layer L is the output state 'x' of layer L-1.
             
             curr_input = all_forces # [B, L, D]
-            
-            # Initial x, v for residual connections?
-            # ParallelMLayer integrates from 0. We can add x0 offset at the end.
+            all_christoffels = [] # To be populated if needed
             
             for layer in self.layers:
                 # Parallel Layer takes full sequence of inputs
                 # We treat the input 'curr_input' as the driving force sequence
-                out_x, out_v = layer(None, None, force=curr_input)
+                out_x, out_v, out_ctx, layer_christoffels = layer(None, None, force=curr_input)
+                all_christoffels.extend(layer_christoffels)
                 
                 # Update input for next layer (stacking manifold layers)
                 # Next layer is driven by the position/state of previous layer
@@ -141,7 +140,7 @@ class Manifold(nn.Module):
             
             # Return last state for compatibility?
             # Just return zeros or last element
-            return logits, (x_final[:, -1], None)
+            return logits, (x_final[:, -1], None), all_christoffels
 
         else:
             # === SEQUENTIAL MODE (LOOP) ===
@@ -153,6 +152,7 @@ class Manifold(nn.Module):
             
             # Process sequence token by token (recurrent dynamics)
             logits_list = []
+            all_christoffels = []
             
             for t in range(seq_len):
                 # Get force for current timestep
@@ -162,11 +162,15 @@ class Manifold(nn.Module):
                 force = force * mask[:, t]
                 
                 # Evolve state through all M-Layers
-                # Evolve state through all M-Layers
                 context = None
                 for layer in self.layers:
-                    # Update state: x_{l+1}, v_{l+1}, ctx_{l+1} = layer(x_l, v_l, force, context)
-                    x, v, context = layer(x, v, force, context)
+                    # Update state
+                    x, v, context, layer_christoffels = layer(x, v, force, context)
+                    # We store christoffels for the LAST token of the batch for regularization?
+                    # Or all tokens? Usually loss is computed per token.
+                    # To avoid memory explosion, we'll only return the current token's christoffels
+                    # to be used in the current step calculation if needed.
+                    all_christoffels = layer_christoffels # Keep last layer or all? Let's say all.
                 
                 # Readout: project position to vocabulary logits
                 out = self.readout_norm(x)
@@ -176,7 +180,7 @@ class Manifold(nn.Module):
             # Stack all logits
             logits = torch.cat(logits_list, dim=1)  # [batch, seq_len, vocab_size]
             
-            return logits, (x, v)
+            return logits, (x, v), all_christoffels
     
     def generate(self, prompt_ids, max_new_tokens=50, temperature=1.0, top_k=None, top_p=None):
         """
@@ -196,7 +200,7 @@ class Manifold(nn.Module):
         device = prompt_ids.device
         
         # Process prompt
-        logits, state = self(prompt_ids)
+        logits, state, _ = self(prompt_ids)
         
         # Start generation
         generated = prompt_ids.tolist()[0]
@@ -239,7 +243,7 @@ class Manifold(nn.Module):
         generated.append(curr_token.item())
         
         for _ in range(max_new_tokens - 1):
-            logits, state = self(curr_token, state=state)
+            logits, state, _ = self(curr_token, state=state)
             curr_token = sample_next(logits, temperature, top_k, top_p)
             generated.append(curr_token.item())
         

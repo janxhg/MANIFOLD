@@ -59,18 +59,33 @@ class MLayer(nn.Module):
         self.norm_x = nn.LayerNorm(dim)
         self.norm_v = nn.LayerNorm(dim)
         
-        # 2. Independent Geodesic Dynamics per Head
+        # 2. Independent or Symmetric Geodesic Dynamics per Head
         # Each head learns its own manifold geometry (Christoffel symbols)
-        # We share the rank budget across heads to keep params similar
+        # Symmetry (Noether): "Isomeric Heads" allow multiple heads to share the same geometry
         head_rank = max(4, rank // heads)
+        sym_cfg = self.physics_config.get('symmetries', {})
+        isomeric_groups = sym_cfg.get('isomeric_groups', None) # e.g. [[0, 1], [2, 3]]
         
-        # Use ReactiveChristoffel if Active Inference is enabled
-        # It defaults to static behavior if disabled, so safe to use always?
-        # Yes, we implemented it to check its own config.
-        self.christoffels = nn.ModuleList([
-            ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
-            for _ in range(heads)
-        ])
+        self.christoffels = nn.ModuleList()
+        # Create a mapping of head index to shared Christoffel instance
+        christoffel_map = {}
+        
+        if isomeric_groups:
+            # We must ensure all heads in a group share the same instance
+            for group in isomeric_groups:
+                # Create one shared instance for the group
+                shared_instance = ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+                for h_idx in group:
+                    christoffel_map[h_idx] = shared_instance
+                    
+        # Fill in the rest (unshred heads)
+        for i in range(heads):
+            if i not in christoffel_map:
+                christoffel_map[i] = ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+        
+        # Add to ModuleList in order
+        for i in range(heads):
+            self.christoffels.append(christoffel_map[i])
         
         # Gating per head
         self.gatings = nn.ModuleList([
@@ -145,7 +160,7 @@ class MLayer(nn.Module):
             force: External force [batch, dim]
             context: Context from previous layer [batch, context_dim]
         Returns:
-            x_next, v_next, context_next
+            x_next, v_next, context_next, christoffel_outputs
         """
         # 1. Pre-LayerNorm
         x_norm = self.norm_x(x)
@@ -175,6 +190,7 @@ class MLayer(nn.Module):
         x_outs = []
         v_outs = []
         gate_outputs = [] # Collect gates for next layer's context
+        christoffel_outputs = [] # Collect Γ(v) for Noether/Hamiltonian loss
         
         for i in range(self.heads):
             # Dynamic time-step selection
@@ -200,6 +216,12 @@ class MLayer(nn.Module):
                 scale = dt_effective / 0.1
                 gate_outputs.append(gate)
             
+            # Collect geometry metadata for the loss function
+            # We re-evaluate here to avoid modifying integrator return types
+            with torch.no_grad():
+                gamma = self.christoffels[i](v_heads[i], x_heads[i])
+            christoffel_outputs.append(gamma)
+            
             x_h, v_h = self.integrators[i](x_heads[i], v_heads[i], force=f_heads[i], dt_scale=scale)
             
             x_outs.append(x_h)
@@ -223,7 +245,7 @@ class MLayer(nn.Module):
         else:
              context_next = gate_outputs[0]
              
-        return x_geo, v_geo, context_next
+        return x_geo, v_geo, context_next, christoffel_outputs
 
 
 class ParallelMLayer(nn.Module):
@@ -356,7 +378,6 @@ class ParallelMLayer(nn.Module):
         # Parallel cumsum is a special case of scan where A=1
         x_seq = torch.cumsum(x_update, dim=1) 
         
-        # Add initial conditions if provided (usually 0 or learned)
-        # Assuming starting from 0 for the sequence relative block
-        
-        return x_seq, v_seq
+        # In Parallel mode, we don't return individual head curvatures currently 
+        # (needs complex extraction from the scan parameters)
+        return x_seq, v_seq, None, []
