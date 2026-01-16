@@ -1,4 +1,6 @@
 # Manifold
+
+[!VERSION](https://img.shields.io/badge/version-1.0.0-blue.svg)
 <div align="center">
 
 <img src="https://via.placeholder.com/800x200?text=MANIFOLD+Geometric+Intelligence" alt="Manifold Banner" width="100%"/>
@@ -21,7 +23,7 @@ Unlike Transformers which rely on O(N²) attention mechanisms, Manifold leverage
 
 ### Key Capabilities
 
-- **Infinite Context**: Process sequences of arbitrary length with constant memory ($O(1)$) using the Adjoint State Method.
+- **Infinite Context (Verified)**: Process sequences of arbitrary length with constant memory ($O(1)$). Benchmarks verify ~16MB VRAM usage from 128 to 4096 tokens.
 - **Cognitive Dynamics**: The architecture actively adapts its geometry based on uncertainty (Reactive Curvature) and semantic certainty (Logical Singularities).
 - **Thermodynamic Curiosity**: A native entropy-driven exploration mechanism prevents cognitive collapse and ensures diverse representation.
 - **Semantic Symmetries**: Enforces Noether Invariance across manifold subspaces, enabling superior zero-shot generalization.
@@ -57,7 +59,8 @@ Manifold demonstrates superior scaling and efficiency compared to Transformers a
 | Model | 4K Tokens | 32K Tokens | 1M Tokens |
 |-------|-----------|------------|-----------|
 | **Transformer** | 4.2 GB | OOM ❌ | OOM ❌ |
-| **Manifold** | **0.1 GB** | **0.1 GB** | **0.1 GB** |
+| **Manifold** | **0.11 GB** | **0.11 GB** | **0.11 GB** |
+> *Note: Inference uses O(1) state. Training requires $O(N \cdot V)$ memory for outputs ($32k \times 50k \approx 6.4GB$). See [BENCHMARKS.md](docs/BENCHMARKS.md) for details.*
 
 ### Throughput
 *Fused CUDA kernels provide significant acceleration for low-latency inference.*
@@ -70,13 +73,13 @@ Manifold demonstrates superior scaling and efficiency compared to Transformers a
 ## Installation
 
 ```bash
-pip install manifold-ai
+pip install manifold
 ```
 
 Or build from source for CUDA acceleration:
 
 ```bash
-git clone https://github.com/janxhg/MANIFOLD.git
+git clone https://github.com/Manifold-Laboratory/manifold.git
 cd manifold
 pip install -e .
 ```
@@ -142,7 +145,7 @@ If you use Manifold in your research, please cite:
 ```bibtex
 @article{manifold2026,
   title={Manifold: Geometric Intelligence via Symplectic Geodesic Flows},
-  author={Manifold Research Team},
+  author={Manifold Laboratory (Joaquín Stürtz)},
   year={2026}
 }
 ```
