@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "manifold"
-version = "1.0.0"
-description = "Manifold: Geometric Intelligence via Symplectic Geodesic Flows"
+name = "gfn"
+version = "1.0.1"
+description = "Manifold: Geometric Intelligence via Symplectic Geodesic Flows | GFN: Geometric Flow Networks"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [

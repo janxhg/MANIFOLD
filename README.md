@@ -1,7 +1,7 @@
 # Manifold
 > **Geometric Intelligence via Symplectic Geodesic Flows.**
 
-[!VERSION](https://img.shields.io/badge/version-1.0.0-blue.svg)
+[![VERSION](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/Manifold-Laboratory/manifold/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Physics](https://img.shields.io/badge/physics-Symplectic-purple.svg)](docs/PHYSICS.md)
 [![Documentation](https://img.shields.io/badge/docs-latest-orange.svg)](docs/API.md)
@@ -11,6 +11,24 @@
 ## Overview
 
 **Manifold** is a fundamental reimagining of neural sequence modeling. Instead of relying on static attention matrices ($O(N^2)$) or unstable recurrent states, Manifold formulates intelligence as **Optimal Transport on a dynamic Riemannian Manifold**. It treats the hidden state as a physical particle traversing a learned geometry, governed by strictly energy-conserving **Symplectic Integrators**, enabling infinite context windows with constant memory.
+
+---
+
+## Installation
+
+```bash
+pip install gfn
+```
+
+Or install from source for development:
+
+```bash
+git clone https://github.com/ManifoldPhysics/Manifold.git
+cd Manifold
+pip install -e "."
+```
+
+---
 
 ---
 
