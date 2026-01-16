@@ -8,48 +8,26 @@
 
 ---
 
-### The Geometry of Thought
-
-Before understanding the architecture, observe its behavior. Below is a projection of the latent state evolution during a complex reasoning task.
-
-![Trajectory Analysis](tests/benchmarks/results/trajectories/trajectory_comparison.png)
-
-> **Figure 1**: **Manifold (Blue)** follows smooth, energy-minimizing geodesic paths, demonstrating purposeful planning. **Standard RNNs (Red)** exhibit chaotic "random walk" behavior, struggling to maintain coherent state trajectories.
-
 ---
 
-## 1. The Breakdown: Constant Memory ($O(1)$)
+## 🔬 Empirical Visual Evidence
 
-Transformative performance usually comes at the cost of quadratic memory scaling ($O(N^2)$). Manifold breaks this law. By strictly adhering to **Symplectic mechanics**, the state is compressed into a conserved physical system ($x, v$), decoupling memory usage from sequence length.
+Manifold is built on empirical rigor. Our benchmark suite demonstrates the emergence of geometric structure in latent paths.
 
+````carousel
+![Christoffel Fields](tests/benchmarks/results/christoffel_vector_field/christoffel_vector_field.png)
+<!-- slide -->
+![Manifold Curvature](tests/benchmarks/results/manifold_curvature/vis_manifold.png)
+<!-- slide -->
+![Geodesic Flow](tests/benchmarks/results/geodesic_flow/geodesic_flow_3d.png)
+<!-- slide -->
 ![VRAM Scaling](tests/benchmarks/results/long_context/vram_vs_context.png)
+````
 
-> **Figure 2**: **Empirical Proof**. While efficient Transformers (Orange) hit an OOM wall at ~32k tokens, Manifold (Blue) remains perfectly flat.
->
-> | Context | Manifold VRAM | Transformer VRAM |
-> | :--- | :--- | :--- |
-> | **128** | 114 MB | 114 MB |
-> | **1M+** | **114 MB** | **Implosion (OOM)** |
-
----
-
-## 2. The Mechanism: Fractal Recursion
-
-How does a fixed-size state encode infinite complexity? **Fractal Tunneling**. When the model encounters semantic density (uncertainty), it "zooms in" by recursively activating sub-manifolds, effectively slowing subjective time to process detail.
-
-![Fractal Zoom](tests/benchmarks/results/fractals/fractal_zoom_comparison.png)
-
-> **Figure 3**: **Depth Map**. The peaks represent the model automatically triggering deeper recursive layers for complex tokens, allocating compute density dynamically.
-
----
-
-## 3. The Stability: Convex Optimization
-
-Standard RNNs notoriously suffer from vanishing gradients and chaotic loss landscapes. Manifold's **Symplectic Integrators** preserve the Hamiltonian (total energy) of the gradient flow, creating smooth, convex optimization basins.
-
-![Loss Landscape](tests/benchmarks/results/loss_landscape/loss_landscape_contours.png)
-
-> **Figure 4**: **Optimization Topology**. Manifold (Left) presents a clean, funnel-like landscape easing convergence. The Baseline (Right) is riddled with local minima and barriers.
+1. **[The Physics](tests/benchmarks/results/christoffel_vector_field/christoffel_vector_field.png)**: Visualization of the **Christoffel Symbols** ($\Gamma^k_{ij}$) acting as widespread force fields that guide token evolution.
+2. **[The Geometry](tests/benchmarks/results/manifold_curvature/vis_manifold.png)**: Curvature heatmap ($\mathcal{R}$) showing how the manifold warps around semantic clusters, creating "gravity wells" of meaning.
+3. **[The Flow](tests/benchmarks/results/geodesic_flow/geodesic_flow_3d.png)**: Actual inference paths. Tokens surf these curved surfaces along minimum-energy **Geodesics**, naturally avoiding chaotic regions.
+4. **[The Proof](tests/benchmarks/results/long_context/vram_vs_context.png)**: The result of this geometric compression is strictly **O(1) Memory Scaling**, enabling infinite context on consumer hardware.
 
 ---
 
