@@ -12,9 +12,12 @@ physics:
   solver: "heun"  # Heun is good for non-linear ODEs
   
   embedding:
-    type: implicit
+    type: functional # Infinite Input
     coord_dim: 16
 
+  readout:
+    type: implicit   # Infinite Output
+    
   active_inference:
     enabled: true
     reactive_curvature:

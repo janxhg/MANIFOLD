@@ -73,8 +73,23 @@ class Manifold(nn.Module):
                     self.layers.append(MLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type, physics_config=self.physics_config))
         
         # Output projection
+        readout_cfg = self.physics_config.get('readout', {})
+        readout_type = readout_cfg.get('type', 'standard')
+        
         self.readout_norm = nn.LayerNorm(dim)
-        self.readout = nn.Linear(dim, vocab_size)
+        
+        if readout_type == 'implicit':
+             coord_dim = emb_cfg.get('coord_dim', 16) 
+             # Linear Readout is too weak for Sinusoidal Coords!
+             # Use a small MLP to decoding the thought vector into the coordinate
+             self.readout = nn.Sequential(
+                 nn.Linear(dim, dim),
+                 nn.GELU(),
+                 nn.Linear(dim, coord_dim)
+             )
+             print(f"[*] Using IMPLICIT READOUT (MLP -> {coord_dim}-d coords)")
+        else:
+             self.readout = nn.Linear(dim, vocab_size)
         
         # Improved Initialization (Critical for convergence)
         # Non-zero random init helps early gradient flow
