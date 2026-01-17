@@ -23,8 +23,8 @@ pip install gfn
 Or install from source for development:
 
 ```bash
-git clone https://github.com/ManifoldPhysics/Manifold.git
-cd Manifold
+git clone https://github.com/Manifold-Laboratory/manifold.git
+cd manifold
 pip install -e "."
 ```
 
