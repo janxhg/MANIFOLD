@@ -1,0 +1,47 @@
+model:
+  dim: 128
+  depth: 4
+  heads: 4
+  vocab_size: 100  # Numbers 0-99
+  max_len: 20  # Sequence length to sort
+  use_scan: false  # CRITICAL: Disable scan to use FULL GEODESIC FLOW
+  
+physics:
+  dt_scale: 0.1
+  alpha: 0.99
+  solver: "heun"  # Heun is good for non-linear ODEs
+  active_inference:
+    enabled: true
+    reactive_curvature:
+      enabled: true
+      plasticity: 0.05
+      enabled: true # Enable Context-Dependent Geometry
+    
+    # Mixture of Manifolds (MoM) Config
+    mixture:
+      enabled: true
+      # Allocating Expert Heads:
+      # Head 0: Euclidean (Linear logic)
+      # Head 1: Hyperbolic (Recursive/Tree logic)
+      # Head 2: Spherical (Cyclic logic)
+      # Head 3: Hyper-Christoffel (Adaptive logic)
+      components:
+        euclidean: [0]
+        hyperbolic: [1]
+        spherical: [2]
+        learnable: [3]true
+    
+training:
+  batch_size: 1024 # Scaled up for speed
+  lr: 1.0e-2 # Scaled LR for larger batch size
+  epochs: 50
+  grad_clip: 1.0
+  log_every: 20
+  save_dir: "checkpoints/sorting"
+  seed: 42
+  
+task:
+  seq_len: 10
+  num_train: 50000
+  num_val: 5000
+  vocab: 100

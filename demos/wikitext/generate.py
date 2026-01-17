@@ -120,9 +120,16 @@ def main():
     ).to(device)
     
     # Load checkpoint
-    checkpoint_path = f"{config['training']['save_dir']}/best_model.pt"
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    print(f"Loaded checkpoint: {checkpoint_path}\n")
+    checkpoint_path = f"{config['training']['save_dir']}/checkpoint_epoch_93.pt"
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Handle both checkpoint formats
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded checkpoint: {checkpoint_path} (Epoch {checkpoint.get('epoch', 'unknown')})\n")
+    else:
+        model.load_state_dict(checkpoint)
+        print(f"Loaded checkpoint: {checkpoint_path}\n")
     
     # Interactive generation
     print("=" * 80)

@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from .geometry import LowRankChristoffel, SymplecticIntegrator, RK4Integrator, HeunIntegrator, LeapfrogIntegrator, DormandPrinceIntegrator, ReactiveChristoffel, TimeDilationHead
+from .geometry import LowRankChristoffel, SymplecticIntegrator, RK4Integrator, HeunIntegrator, LeapfrogIntegrator, DormandPrinceIntegrator, ReactiveChristoffel, TimeDilationHead, HyperChristoffel, EuclideanChristoffel, HyperbolicChristoffel, SphericalChristoffel
 from .scan import parallel_scan
 
 class RiemannianGating(nn.Module):
@@ -61,27 +61,74 @@ class MLayer(nn.Module):
         
         # 2. Independent or Symmetric Geodesic Dynamics per Head
         # Each head learns its own manifold geometry (Christoffel symbols)
-        # Symmetry (Noether): "Isomeric Heads" allow multiple heads to share the same geometry
+        # Mixture of Manifolds (MoM) support
+        mixture_cfg = self.physics_config.get('mixture', {})
+        mixture_enabled = mixture_cfg.get('enabled', False)
+        
         head_rank = max(4, rank // heads)
         sym_cfg = self.physics_config.get('symmetries', {})
         isomeric_groups = sym_cfg.get('isomeric_groups', None) # e.g. [[0, 1], [2, 3]]
         
         self.christoffels = nn.ModuleList()
-        # Create a mapping of head index to shared Christoffel instance
         christoffel_map = {}
         
         if isomeric_groups:
-            # We must ensure all heads in a group share the same instance
-            for group in isomeric_groups:
-                # Create one shared instance for the group
-                shared_instance = ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
-                for h_idx in group:
-                    christoffel_map[h_idx] = shared_instance
-                    
-        # Fill in the rest (unshred heads)
+             # Logic for symmetries override MoM individual allocation for grouped heads
+             # We assume MoM is per-group if symmetries are on.
+             pass
+
+        # Manifold Factory
+        def create_manifold(head_idx):
+            if not mixture_enabled:
+                 # Standard Behavior
+                 hyper = self.physics_config.get('hyper_curvature', {}).get('enabled', False)
+                 if hyper:
+                     return HyperChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+                 else:
+                     return ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+            
+            # Mixture allocation
+            # components: {'euclidean': [0], 'hyperbolic': [1], 'spherical': [2], 'learnable': [3]}
+            comps = mixture_cfg.get('components', {})
+            
+            # Check explicit assignment
+            for type_name, indices in comps.items():
+                if head_idx in indices:
+                    if type_name == 'euclidean':
+                        return EuclideanChristoffel(self.head_dim, physics_config=self.physics_config)
+                    elif type_name == 'hyperbolic':
+                        return HyperbolicChristoffel(self.head_dim, physics_config=self.physics_config)
+                    elif type_name == 'spherical':
+                        return SphericalChristoffel(self.head_dim, physics_config=self.physics_config)
+                    elif type_name == 'learnable' or type_name == 'hyper':
+                         return HyperChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+            
+            # Default fallback for unassigned heads in MoM mode: Learnable (Hyper)
+            return HyperChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+
+        # Fill Map
         for i in range(heads):
-            if i not in christoffel_map:
-                christoffel_map[i] = ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+             # Handle symmetries if present
+             if isomeric_groups:
+                 found_group = False
+                 for group in isomeric_groups:
+                     if i in group:
+                         if group[0] in christoffel_map:
+                             # Already created for leader
+                             christoffel_map[i] = christoffel_map[group[0]]
+                         else:
+                             # Create for leader
+                             instance = create_manifold(i)
+                             christoffel_map[i] = instance
+                             # Assign to others for consistency
+                             for member in group:
+                                 christoffel_map[member] = instance
+                         found_group = True
+                         break
+                 if found_group: continue
+             
+             # Independent
+             christoffel_map[i] = create_manifold(i)
         
         # Add to ModuleList in order
         for i in range(heads):
@@ -93,7 +140,7 @@ class MLayer(nn.Module):
         
         if self.use_dynamic_time:
             # Auto-Wormholes: Model predicts dt per head/step
-            range_min, range_max = self.physics_config['active_inference']['dynamic_time'].get('range', [0.1, 5.0])
+            range_min, range_max = self.physics_config.get('active_inference', {}).get('dynamic_time', {}).get('range', [0.1, 5.0])
             self.time_heads = nn.ModuleList([
                 TimeDilationHead(self.head_dim, range_min, range_max)
                 for _ in range(heads)

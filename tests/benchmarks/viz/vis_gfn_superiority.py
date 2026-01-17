@@ -150,11 +150,14 @@ def run_benchmark_v3():
     heads = 4
     vocab = 2 # 0, 1
     
-    # Manifold (The Challenger)
+    # Manifold (The Challenger - Cognitive Engine)
     gfn = Manifold(
         vocab_size=vocab, dim=dim, depth=depth, heads=heads, rank=16,
         use_scan=False, # Sequential for stability
-        physics_config={'active_inference': {'enabled': True, 'reactive_curvature': {'enabled': True, 'plasticity': 0.05}}}
+        physics_config={
+            'active_inference': {'enabled': True, 'reactive_curvature': {'enabled': True, 'plasticity': 0.05}},
+            'hyper_curvature': {'enabled': True} # Cognitive Engine
+        }
     ).to(device)
     
     # MicroGPT (The Champion)
@@ -180,7 +183,7 @@ def run_benchmark_v3():
     sns.set_style("whitegrid")
     
     # Plot 1: Accuracy
-    ax1.plot(lengths, gfn_acc, 'o-', linewidth=3, color='#E76F51', label='Manifold (Dynamics)')
+    ax1.plot(lengths, gfn_acc, 'o-', linewidth=3, color='#E76F51', label='Manifold (Hyper-Cognitive)')
     ax1.plot(lengths, gpt_acc, 's--', linewidth=3, color='#2A9D8F', label='Transformer (Attention)')
     ax1.axvline(x=20, color='gray', linestyle=':', label='Training Length (L=20)')
     ax1.set_title("OOD Generalization (Accuracy)", fontsize=14, fontweight='bold')

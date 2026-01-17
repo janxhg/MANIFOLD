@@ -181,7 +181,7 @@ class GFNLoss(nn.Module):
         """
         # Primary loss: Cross-Entropy
         batch_size, seq_len, vocab_size = logits.shape
-        ce = self.ce_loss(logits.view(-1, vocab_size), targets.view(-1))
+        ce = self.ce_loss(logits.reshape(-1, vocab_size), targets.reshape(-1))
         
         loss_dict = {"ce": ce.item()}
         total = ce

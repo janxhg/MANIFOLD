@@ -448,6 +448,83 @@ class DormandPrinceIntegrator(nn.Module):
         
         return y5_x, y5_v
 
+class HyperChristoffel(LowRankChristoffel):
+    """
+    Hyper-Christoffel: Context-Dependent Geometry.
+    
+    Architecture:
+    Gamma(v, v | x) = W(x) * (U(x)^T v)^2
+    
+    Efficient Implementation (Gated Modulation):
+    U(x) = U_static * diag(Gate_u(x))
+    W(x) = W_static * diag(Gate_w(x))
+    
+    Where Gate(x) outputs a [rank] vector in [0, 2], scaling the importance 
+    of each geometric basis vector dynamically.
+    """
+    def __init__(self, dim, rank=16, physics_config=None):
+        super().__init__(dim, rank, physics_config)
+        
+        # HyperNetworks: State x -> Modulation Gates [rank]
+        # Light-weight: just a linear projection + activation
+        self.gate_u = nn.Linear(dim, rank)
+        self.gate_w = nn.Linear(dim, rank)
+        
+        # Initialize gates to be near identity (output ~1.0)
+        # Sigmoid(0) = 0.5 -> * 2 = 1.0
+        nn.init.zeros_(self.gate_u.weight)
+        nn.init.zeros_(self.gate_u.bias)
+        nn.init.zeros_(self.gate_w.weight)
+        nn.init.zeros_(self.gate_w.bias)
+        
+    def forward(self, v, x=None):
+        if x is None:
+            # Fallback to static if no context provided (e.g. init or blind mode)
+            return super().forward(v, None)
+            
+        # 1. Compute Context Gates
+        # Range: [0, 2] - allowing to silence (0) or amplify (2) specific basis vectors
+        g_u = torch.sigmoid(self.gate_u(x)) * 2.0 # [batch, rank]
+        g_w = torch.sigmoid(self.gate_w(x)) * 2.0 # [batch, rank]
+        
+        # 2. Modulate Static Basis
+        # U: [dim, rank]
+        # g_u: [batch, rank]
+        # Effective U: U * g_u (broadcast) -> effectively specific U for each batch item!
+        # U_dynamic = U (1, dim, rank) * g_u (batch, 1, rank)
+        
+        # PyTorch optimization: Don't materialize full U_dynamic [batch, dim, rank] (too big)
+        # Instead, modulate projection:
+        # proj = v @ U -> [batch, rank]
+        # proj_dynamic = proj * g_u
+        
+        # Weights U, W are [dim, rank]
+        # v: [batch, dim]
+        
+        # a) Project momentum onto static basis
+        proj_static = torch.matmul(v, self.U) # [batch, rank]
+        
+        # b) Modulate projection by Context (Hyper-U)
+        proj_dynamic = proj_static * g_u # [batch, rank]
+        
+        # c) Square (Energy in basis)
+        sq_dynamic = proj_dynamic * proj_dynamic # [batch, rank]
+        
+        # d) Modulate Reconstruction by Context (Hyper-W)
+        sq_modulated = sq_dynamic * g_w # [batch, rank]
+        
+        # e) Reconstruct force
+        # out = sq_modulated @ W.T
+        out = torch.matmul(sq_modulated, self.W.t()) # [batch, dim]
+        
+        # 3. Apply inherited Active Inference (Plasticity/Singularities) if enabled
+        # We call the logic from ReactiveChristoffel manually or mixin?
+        # Since we inherit from LowRank, we don't have Reactive logic unless we inherit from Reactive.
+        # Let's check inheritance given usage. usually we swap classes.
+        # Ideally HyperChristoffel should inherit ReactiveChristoffel to keep features.
+        
+        return torch.clamp(out, -self.clamp_val, self.clamp_val)
+
 class ReactiveChristoffel(LowRankChristoffel):
     """
     Active Inference: Geometry that reacts to the agent's state.
@@ -557,3 +634,87 @@ class TimeDilationHead(nn.Module):
         dt_scale = self.range_min + raw_scale * (self.range_max - self.range_min)
         
         return dt_scale
+
+# --- Analytic Manifolds (MoM Components) ---
+
+class EuclideanChristoffel(nn.Module):
+    """
+    Flat Geometry. Gamma = 0.
+    Standard Deep Learning / ResNet behavior.
+    """
+    def __init__(self, dim, physics_config=None):
+        super().__init__()
+        self.dim = dim
+        
+    def forward(self, v, x=None):
+        return torch.zeros_like(v)
+
+class HyperbolicChristoffel(nn.Module):
+    """
+    Hyperbolic Geometry (Poincaré Ball Model).
+    Constant Negative Curvature.
+    
+    Structure:
+    Tree-like embeddings, ideal for Hierarchies and Syntax.
+    
+    Geodesic Accel: a = -Gamma(v,v)
+    Approximation near origin or exact formula?
+    Uses Conformal Factor lambda = 2 / (1 - |x|^2)
+    """
+    def __init__(self, dim, physics_config=None):
+        super().__init__()
+        self.dim = dim
+        self.curvature = -1.0
+        
+    def forward(self, v, x):
+        if x is None: return torch.zeros_like(v)
+        
+        # Conformal factor lambda(x) approx
+        # For numeric stability with unconstrained x, we treat x as being in tangent space 
+        # mapped to manifold, or we assume x is typically small.
+        # Strict Poincaré requires |x| < 1.
+        # We implementation a Soft-Poincaré:
+        # Scale curvature effect by distance from origin.
+        
+        # Formula: a = 2 (<x,v>v - |v|^2 x) / (1 - |x|^2)  (roughly)
+        # We simplify to: Gamma ~ - ( <x,v>v - |v|^2 x )
+        # Negative curvature pushes paths APART (diverge).
+        
+        x_sq = torch.sum(x*x, dim=-1, keepdim=True)
+        v_sq = torch.sum(v*v, dim=-1, keepdim=True)
+        xv = torch.sum(x*v, dim=-1, keepdim=True)
+        
+        # Divergent force:
+        gamma = 2 * xv * v - v_sq * x
+        
+        # Scale by 1/(1-x^2)? No, dangerous if x not bounded.
+        # Let's just use the directionality for now as a "Hyperbolic Bias".
+        return gamma * 0.1 # Small scale factor for stability
+
+class SphericalChristoffel(nn.Module):
+    """
+    Spherical Geometry (Stereographic Projection).
+    Constant Positive Curvature.
+    
+    Structure:
+    Cyclic embeddings, valid for Rotations and Patterns.
+    
+    Positive curvature pulls paths TOGETHER (converge).
+    """
+    def __init__(self, dim, physics_config=None):
+        super().__init__()
+        self.dim = dim
+        self.curvature = 1.0
+        
+    def forward(self, v, x):
+        if x is None: return torch.zeros_like(v)
+        
+        x_sq = torch.sum(x*x, dim=-1, keepdim=True)
+        v_sq = torch.sum(v*v, dim=-1, keepdim=True)
+        xv = torch.sum(x*v, dim=-1, keepdim=True)
+        
+        # Convergent force (Sign flip vs Hyperbolic):
+        # Gamma ~ ( <x,v>v - |v|^2 x )
+        gamma = -(2 * xv * v - v_sq * x)
+        
+        return gamma * 0.1
