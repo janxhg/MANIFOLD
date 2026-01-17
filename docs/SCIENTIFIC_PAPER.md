@@ -112,7 +112,22 @@ We evaluated MANIFOLD on the **Sorting Task** (Length 10, Vocab 100), a proxy fo
 
 While the Transformer currently outperforms on short sequences due to its inductive bias for permutation ($O(N^2)$ visibility), the **Hyper-Christoffel** and **MoM** architectures demonstrate that geometric models *can* learn logical reasoning tasks that static RNNs cannot. The gap indicates the need for further tuning of the geometric priors.
 
-## 7. Conclusion
+## 7. Discussion: Strengths & Weaknesses
+
+### 7.1 Strength: Infinite Memory & Semantic Generalization
+The most distinctive feature of MANIFOLD is its **O(1) memory complexity** combined with **infinite horizon stability**. Unlike Transformers, which must store every previous token $k, v$ pair (O(N) memory), MANIFOLD compresses the entire history into a single geometric state $(q, p)$. 
+*   **Result:** As demonstrated in the Parity task (Fig. Benchmark), MANIFOLD maintains constant VRAM usage (0.5GB) even at $L=10,000$, whereas Transformers crash (OOM) at $L \approx 1,000$.
+*   **Reasoning:** The symplectic integrator prevents the "gradient vanishing" chaos typical of RNNs, effectively creating a "super-conductor" for gradients through time.
+
+### 7.2 Weakness: The "Copy-Paste" Difficulty
+While MANIFOLD excels at tasks requiring global state tracking (Parity), it struggles with rote memorization tasks (e.g., Copy Task) where the Transformer excels.
+*   **Observation:** In the Sorting Task, the Transformer quickly learns to "copy" the sorted numbers. MANIFOLD takes significantly longer (4.22 vs 2.37 loss).
+*   **Physical Explanation (Reconstructive vs. Addressable Memory):** 
+    *   **Transformer:** Has "Random Access Memory" mechanism. It can "look" at token $i$ and copy it to position $j$ with a simple pointer.
+    *   **MANIFOLD:** Operates like a **biological brain**. To "copy" a sequence, it must *encode* the sequence into the curvature of its manifold (synaptic potentiation) and then *reconstruct* it later by traversing the same path. It has no "buffer." 
+    *   **Implication:** This makes MANIFOLD "slower" at simple data movement but potentially more robust at **understanding** structure, as it cannot simply memorize without integrating the information into its physics.
+
+## 8. Conclusion
 
 MANIFOLD proves that **geometry is all you need**... provided the geometry is flexible enough. By combining Symplectic integration, Hyper-Christoffel plasticity, and a Mixture of Topological Experts, we have created a cognitive engine that is theoretically grounded in physics and capable of complex reasoning with $O(1)$ memory. Future work will focus on scaling this architecture to language modeling (WikiText) and bridging the performance gap with Transformers on permutation tasks.
 
