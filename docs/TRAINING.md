@@ -21,10 +21,10 @@ We have empirically measured the memory usage of Manifold models. Thanks to $O(1
 
 | Model Size | Parameters | Training VRAM (Batch 1) | Inference VRAM (Context 128) | Recommended GPU |
 | :--- | :--- | :--- | :--- | :--- |
-| **Small** | ~1.15 M | ~0.8 GB | ~16.6 MB | GTX 1650 / RTX 3050 |
-| **Medium** | ~6.5 M | ~2.5 GB | ~100 MB | RTX 3060 / 4060 |
-| **Large** | ~51 M | ~8.0 GB | ~450 MB | RTX 3090 / 4090 |
-| **XL** | ~200 M | ~24 GB | ~1.5 GB | A100 / H100 |
+| **Small** | ~1.15 M | ~0.8 GB | ~16.6 MB | gtx 1650 / gtx 1650 |
+| **Medium** | ~6.5 M | ~2.5 GB | ~100 MB | gtx 1650 / gtx 1650 | (estimated)
+| **Large** | ~51 M | ~8.0 GB | ~450 MB | gtx 1650 / gtx 1650 | (estimated)
+| **XL** | ~200 M | ~24 GB | ~1.5 GB | gtx 1650 / gtx 1650 | (estimated)
 
 > **Note**: Inference VRAM remains constant regardless of sequence length (tested up to 4096 tokens).
 
