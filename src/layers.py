@@ -45,7 +45,7 @@ class MLayer(nn.Module):
         - 'symplectic': Velocity Verlet - Energy preserving
         - 'leapfrog': Störmer-Verlet - Best symplectic
     """
-    def __init__(self, dim, heads=4, rank=16, base_dt=0.1, integrator_type='heun', physics_config=None):
+    def __init__(self, dim, heads=4, rank=16, base_dt=0.1, integrator_type='heun', physics_config=None, layer_idx=0, total_depth=6):
         super().__init__()
         assert dim % heads == 0, f"Dim {dim} must be divisible by heads {heads}"
         
@@ -54,6 +54,11 @@ class MLayer(nn.Module):
         self.head_dim = dim // heads
         self.physics_config = physics_config or {}
         self.base_dt = self.physics_config.get('stability', {}).get('base_dt', base_dt)
+        
+        # DeepNet-style depth scaling for gradient stability
+        self.layer_idx = layer_idx
+        self.total_depth = total_depth
+        self.depth_scale = 1.0 / (total_depth ** 0.5)  # 1/√depth
         
         # 1. Pre-LayerNorm for stability (Standard in modern Transformers)
         self.norm_x = nn.LayerNorm(dim)
@@ -163,8 +168,9 @@ class MLayer(nn.Module):
             self.dt_params = nn.Parameter(torch.tensor(scale_vals))
             self.time_heads = None
 
-        # Latent friction (damping) prevents energy divergence in deep residuals
-        self.damping = self.physics_config.get('stability', {}).get('damping', 0.05)
+        # Friction coefficient for Conformal Symplectic System
+        # Integrated formally into the integrator dynamics
+        self.friction = self.physics_config.get('stability', {}).get('friction', 0.05)
 
 
         
@@ -284,27 +290,27 @@ class MLayer(nn.Module):
                 gamma = self.christoffels[i](v_heads[i], x_heads[i])
             christoffel_outputs.append(gamma)
             
+            # Pure integration - integrator returns absolute next state
             x_h, v_h = self.integrators[i](x_heads[i], v_heads[i], force=f_heads[i], dt_scale=scale)
             
-            # The 'Work' done by the layer is the DELTA from the initial state
-            # Apply Damping: delta_v = delta_v - damping * v
-            v_delta = v_h - v_heads[i]
-            if self.damping > 0:
-                v_delta = v_delta - self.damping * v_heads[i]
+            # Velocity normalization (preserves direction/memory, controls magnitude)
+            # This prevents vanishing memory while maintaining stability
+            v_h = v_h / (torch.norm(v_h, dim=-1, keepdim=True) + 1e-6)
             
-            x_outs.append(x_h - x_heads[i])
-            v_outs.append(v_delta)
+            # Store absolute states (NOT deltas)
+            x_outs.append(x_h)
+            v_outs.append(v_h)
             
-        # 4. Concatenate
+        # 4. Concatenate absolute states
         x_cat = torch.cat(x_outs, dim=-1)
         v_cat = torch.cat(v_outs, dim=-1)
         
-        # 5. Output Projection (Mixing)
+        # 5. Output Projection (Mixing) - optional for multi-head
         if self.heads > 1:
-            x_geo = self.out_proj_x(x_cat)
-            v_geo = self.out_proj_v(v_cat)
+            x_next = self.out_proj_x(x_cat)
+            v_next = self.out_proj_v(v_cat)
         else:
-            x_geo, v_geo = x_cat, v_cat
+            x_next, v_next = x_cat, v_cat
             
         # Prepare context for next layer
         if self.heads > 1:
@@ -312,14 +318,8 @@ class MLayer(nn.Module):
         else:
              context_next = gate_outputs[0]
              
-        # !!! RESIDUALLY ADD TO INPUT !!!
-        # Apply Scaling to the Work Delta to ensure stability in deep networks
-        res_scale = self.physics_config.get('stability', {}).get('residual_scale', 0.5)
-        
-        # Unit-Energy Drift: Apply multiplicative friction to ground the momentum
-        v_final = (v + v_geo * res_scale) * (1.0 - self.damping)
-        
-        return x + x_geo * res_scale, v_final, context_next, christoffel_outputs
+        # Return absolute states (Pure Hamiltonian Evolution)
+        return x_next, v_next, context_next, christoffel_outputs
 
 
 
@@ -466,10 +466,18 @@ class FractalMLayer(nn.Module):
     If local curvature R is high, the particle "tunnels" into a 
     high-resolution sub-manifold to resolve semantic complexity.
     """
-    def __init__(self, dim, heads=4, rank=16, base_dt=0.1, integrator_type='heun', physics_config=None):
+    def __init__(self, dim, heads=8, rank=16, base_dt=0.1, integrator_type='symplectic', physics_config=None, layer_idx=0, total_depth=6):
         super().__init__()
         self.dim = dim
+        self.heads = heads
+        self.head_dim = dim // heads
+        self.rank = rank
         self.physics_config = physics_config or {}
+        
+        # DeepNet-style depth scaling for gradient stability
+        self.layer_idx = layer_idx
+        self.total_depth = total_depth
+        self.depth_scale = 1.0 / (total_depth ** 0.5)  # 1/√depth
         
         # Macro-manifold: Standard MLayer evolution
         self.macro_manifold = MLayer(

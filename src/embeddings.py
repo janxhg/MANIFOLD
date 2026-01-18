@@ -184,4 +184,18 @@ class FunctionalEmbedding(nn.Module):
         
         # 3. Boost scale to match standard embedding variance
         # SIREN + Xavier yields ~0.4, so 1.5x - 2.0x is safer for residuals
-        return out * 1.5
+        out = out * 1.5
+        
+        # Enforce Zero-Input = Zero-Force (Critical for Inertial Memory tasks like Parity)
+        # If all coordinate bits are 0 (ID=0), force should be 0.
+        if self.mode == 'binary':
+             # bits: [B, L, C] -> max over C -> [B, L, 1]
+             # If any bit is 1, mask is 1. If all 0, mask is 0.
+             # bits was computed earlier but not saved in self (local var).
+             # Re-compute mask from input_ids (efficiently)
+             # Actually we need access to 'bits' from earlier.
+             # Let's rewrite the forward slightly to keep bits.
+             active_mask = (bits.float().sum(dim=-1, keepdim=True) > 0).float()
+             out = out * active_mask
+             
+        return out

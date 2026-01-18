@@ -25,6 +25,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.model import Manifold
+from src.optim import RiemannianAdam
+from tests.benchmarks.baselines import MicroGPT
 
 
 def create_associative_recall_data(batch_size, num_pairs=5, vocab_size=32):
@@ -103,7 +105,15 @@ def train_and_evaluate(config_name, physics_config, device,
         physics_config=physics_config
     ).to(device)
     
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    # Use Riemannian Adam for Manifold
+    if isinstance(model, Manifold):
+        optimizer = RiemannianAdam(model.parameters(), lr=lr, weight_decay=1e-4, retraction='normalize', max_norm=10.0)
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+    max_steps = num_steps # Define max_steps for the scheduler
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=lr, total_steps=max_steps, pct_start=0.2)
+    
     criterion = nn.CrossEntropyLoss()
     
     losses = []

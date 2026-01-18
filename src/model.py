@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from .layers import MLayer, ParallelMLayer
+from .readout import ImplicitReadout
 
 
 class Manifold(nn.Module):
@@ -62,16 +63,18 @@ class Manifold(nn.Module):
              print(f"[*] Active Inference ENABLED (Plasticity, Singularities, Dynamic Time)")
         
         self.layers = nn.ModuleList()
-        for _ in range(depth):
+        for idx in range(depth):
             if use_scan:
                 self.layers.append(ParallelMLayer(dim, heads=heads, physics_config=self.physics_config))
             else:
                 # v0.8.0 Fractal Manifolds
                 if self.physics_config.get('fractal', {}).get('enabled', False):
                     from .layers import FractalMLayer
-                    self.layers.append(FractalMLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type, physics_config=self.physics_config))
+                    self.layers.append(FractalMLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type, 
+                                                     physics_config=self.physics_config, layer_idx=idx, total_depth=depth))
                 else:
-                    self.layers.append(MLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type, physics_config=self.physics_config))
+                    self.layers.append(MLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type, 
+                                             physics_config=self.physics_config, layer_idx=idx, total_depth=depth))
         
         # Output projection
         readout_cfg = self.physics_config.get('readout', {})
@@ -81,13 +84,13 @@ class Manifold(nn.Module):
         
         if readout_type == 'implicit' or readout_type == 'binary':
              coord_dim = emb_cfg.get('coord_dim', 16) 
-             # MLP Decoder: Balanced for coordinate regression
+             # MLP Decoder: Hard threshold (original)
              self.readout = nn.Sequential(
                  nn.Linear(dim, dim),
                  nn.GELU(),
                  nn.Linear(dim, coord_dim)
              )
-             print(f"[*] Using IMPLICIT READOUT ({readout_type} MLP -> {coord_dim}-d)")
+             print(f"[*] Using BINARY READOUT (Hard Threshold MLP → {coord_dim}-d)")
         else:
              self.readout = nn.Linear(dim, vocab_size)
         
@@ -202,14 +205,8 @@ class Manifold(nn.Module):
                     x, v, context, layer_christoffels = layer(x, v, force, context)
                     all_christoffels = layer_christoffels 
                 
-                # Unit-Energy Shell Projection
-                # Binds the entire phase space (x, v) to a safe latent manifold
-                # Increased to 50.0 to avoid "cramming" the manifold and losing resolution.
-                energy_radius = 50.0
-                state_norm = torch.sqrt(torch.sum(x**2 + v**2, dim=-1, keepdim=True))
-                energy_scale = torch.min(torch.ones_like(state_norm), energy_radius / (state_norm + 1e-6))
-                x = x * energy_scale
-                v = v * energy_scale
+                # State is already Phase-Locked per-layer in MLayer.
+                # No additional coarse clamping needed.
                 
                 # Readout: project position to vocabulary logits
                 out = self.readout_norm(x)

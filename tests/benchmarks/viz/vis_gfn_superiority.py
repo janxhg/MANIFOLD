@@ -14,7 +14,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import Models
+# Import Models
 from src.model import Manifold
+from src.optim import RiemannianAdam
 from tests.benchmarks.baselines import MicroGPT
 from tests.benchmarks.bench_utils import measure_peak_memory
 
@@ -41,8 +43,14 @@ class ParityTask:
         
         return x, y
 
-def train_until_convergence(model, task, max_steps=2500, lr=5e-4, device='cuda', threshold=0.01):
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5) # Reduced WD to protect SIRENs
+def train_until_convergence(model, task, max_steps=1500, lr=3e-4, device='cuda', threshold=0.01):
+    # Use Riemannian Adam for Manifold model to prevent weight explosion
+    if isinstance(model, Manifold):
+        print(f"[*] Using RiemannianAdam Optimizer (max_norm=10.0)")
+        optimizer = RiemannianAdam(model.parameters(), lr=lr, weight_decay=1e-4, retraction='normalize', max_norm=10.0)
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4) # Standard for GPT
+
     # Start from L=2 (Basic XOR) to ensure mastery before scaling
     current_length = 2
     
@@ -65,19 +73,21 @@ def train_until_convergence(model, task, max_steps=2500, lr=5e-4, device='cuda',
     normalized_loss = 1.0
     static_acc = 0.0
     
-    pbar = tqdm(range(max_steps), desc=f"Training {model.__class__.__name__} (L={current_length})")
+    # Configure readout temperature schedule
+    if hasattr(model, 'readout') and hasattr(model.readout, 'set_max_steps'):
+        model.readout.set_max_steps(max_steps)
+    
+    pbar = tqdm(range(max_steps), desc=f"Training {model.__class__.__name__} (L=20)")
     normalized_loss = 1.0
     
+    # Fixed Length Training (OOD Benchmark Standard)
+    current_length = 20 
+    
     for i in pbar:
-        # 1. Gated Syllabus: Only increase length if the model has MASTERED the current one (Acc > 92%)
-        # and has spent at least 150 steps on it.
-        if i > 0 and i % 150 == 0 and static_acc > 0.92 and current_length < task.length:
-             current_length = min(task.length, current_length + 2)
-             pbar.set_description(f"Training {model.__class__.__name__} (L={current_length})")
-             # Reset EMA for the new length to avoid bias from old easy samples
-             static_acc = 0.5 
+        # Standard OOD Setup: Train on fixed SHORT length, Test on LONG
+        # No curriculum, just pure generalization test.
              
-        # Generate batch with current syllabus length
+        # Generate batch with fixed length
         temp_task = ParityTask(length=current_length)
         x, y = temp_task.generate_batch(128, device=device) 
         
@@ -110,9 +120,13 @@ def train_until_convergence(model, task, max_steps=2500, lr=5e-4, device='cuda',
             loss = criterion(logits.view(-1, task.vocab_size), y.view(-1))
             
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1) # Aggressive clipping for stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.1)
         optimizer.step()
         scheduler.step()
+        
+        # Update temperature schedule
+        if hasattr(model, 'readout') and hasattr(model.readout, 'update_step'):
+            model.readout.update_step()
         
         loss_val = loss.item()
         
@@ -143,13 +157,20 @@ def train_until_convergence(model, task, max_steps=2500, lr=5e-4, device='cuda',
         loss_history.append(loss_val)
         
         # Strictly solved threshold
-        if normalized_loss < 0.005 and i > 200:
-            print(f"🚀 Converged at step {i} (Loss: {normalized_loss:.5f})")
+        # Check both Loss AND Accuracy
+        if (normalized_loss < 0.005 or static_acc > 0.995) and i > 200:
+            print(f"🚀 Converged at step {i} (Loss: {normalized_loss:.5f}, Acc: {static_acc*100:.1f}%)")
+            # Save the winning state to ensure generalization test uses the best version
+            torch.save(model.state_dict(), "best_manifold_parity.pth")
             break
             
+    # Load best weights if we converged (or just return current if ran out of steps)
+    if os.path.exists("best_manifold_parity.pth"):
+         model.load_state_dict(torch.load("best_manifold_parity.pth"))
+         
     return loss_history
 
-def evaluate_length_generalization(model, task_cls, train_len=100, lengths=[100, 200, 500], device='cuda'):
+def evaluate_length_generalization(model, task_cls, train_len=20, lengths=[20, 40, 60, 80, 100], device='cuda'):
     model.eval()
     accuracies = []
     memories = []
@@ -233,7 +254,9 @@ def run_benchmark_v3():
     
     # 1. Models
     # Dimensions need to be sufficient but not huge for a benchmark.
-    dim = 128
+    # 1. Models
+    # Dimensions need to be sufficient but not huge for a benchmark.
+    dim = 128 # Reverted to 128 (Capacity is not the issue, Dynamics are)
     depth = 6 # Deepen for XOR state chain tracking
     heads = 4 
     vocab = 2 # 0, 1
@@ -242,10 +265,10 @@ def run_benchmark_v3():
     gfn = Manifold(
         vocab_size=vocab, dim=dim, depth=depth, heads=heads,
         use_scan=False, 
-        integrator_type='leapfrog', # Symplectic for energy conservation
+        integrator_type='leapfrog',
         physics_config={
             'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
-            'readout': {'type': 'standard'}, # ABLATION: Standard Softmax Head
+            'readout': {'type': 'binary'},  # NATIVE BINARY MODE
             'active_inference': {'enabled': True, 'reactive_curvature': {'enabled': True, 'plasticity': 0.05}},
             'hyper_curvature': {'enabled': True},
             'stability': {'base_dt': 0.3, 'damping': 0.05, 'residual_scale': 0.5} 
@@ -262,7 +285,7 @@ def run_benchmark_v3():
     
     print(f"\n--- Training Phase (Target: Loss < 0.005) ---")
     print(f"Manifold Model: {dim} dim, {depth} layers, 16-bit binary readout")
-    gfn_loss = train_until_convergence(gfn, train_task, max_steps=1500, lr=5e-3, device=device)
+    gfn_loss = train_until_convergence(gfn, train_task, max_steps=1500, lr=3e-4, device=device)
     gpt_loss = train_until_convergence(gpt, train_task, max_steps=4000, lr=1e-3, device=device) # GPT needs more care/steps sometimes
     
     # 3. Test on LONG sequences

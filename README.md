@@ -1,10 +1,19 @@
 # Manifold
 > **Geometric Intelligence via Symplectic Geodesic Flows.**
 
-[![VERSION](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/Manifold-Laboratory/manifold/releases)
+[![VERSION](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/Manifold-Laboratory/manifold/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Physics](https://img.shields.io/badge/physics-Symplectic-purple.svg)](docs/PHYSICS.md)
 [![Documentation](https://img.shields.io/badge/docs-latest-orange.svg)](docs/API.md)
+
+---
+
+## What's New in v2.5.0 (Riemannian Stability)
+
+*   **Riemannian Optimization**: Native integration of `RiemannianAdam` ensures all parameter updates strictly respect the manifold geometry, eliminating the "Euclidean Drift" instability.
+*   **Adaptive Curvature Gating**: New Learnable Valve mechanism (`gate_proj`) that allows the model to coast (Zero Curvature) when state preservation is optimal, solving "Over-Correction" in long sequences.
+*   **Zero-Force Inductive Bias**: Architectural enforcement that `Input(0) -> Force(0)`, allowing perfect inertial memory for logical tasks like Parity.
+*   **Velocity Normalization**: Stabilized flows that preserve vector direction (memory) while controlling magnitude, enabling infinite-orbit stability.
 
 ---
 

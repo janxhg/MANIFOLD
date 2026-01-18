@@ -26,10 +26,23 @@ class LowRankChristoffel(nn.Module):
         self.U = nn.Parameter(torch.randn(dim, rank) * 0.001)
         self.W = nn.Parameter(torch.randn(dim, rank) * 0.001)
         
+        # Friction coefficient for Conformal Symplectic System
+        self.friction = self.config.get('stability', {}).get('friction', 0.05)
+        
+        # Position Gate V: dim -> 1 (Scalar gravity well strength)
+        # We start with near-zero weights so initially there are no gravity wells.
         # Position Gate V: dim -> 1 (Scalar gravity well strength)
         # We start with near-zero weights so initially there are no gravity wells.
         self.V = nn.Linear(dim, 1, bias=False)
         nn.init.zeros_(self.V.weight)
+        
+        # Adaptive Curvature Gate (The Valve): dim -> dim
+        # Learns when to apply curvature vs coasting
+        # Init to open (0 bias = 0.5 sigmoid) or slightly closed?
+        # Let's start neutral.
+        self.gate_proj = nn.Linear(dim, dim)
+        nn.init.zeros_(self.gate_proj.weight)
+        nn.init.constant_(self.gate_proj.bias, 2.0) # Start OPEN (sigmoid(2) ~ 0.88) to encourage learning early
         
     def forward(self, v, x=None):
         """
@@ -54,10 +67,11 @@ class LowRankChristoffel(nn.Module):
         # v: [batch, dim]
         proj = torch.matmul(v, self.U) # [batch, rank]
         
-        # Soft-Saturation: Curvature scales quadratically near origin, 
-        # but linearly for high momentum to prevent energy explosion.
-        # sq = proj^2 / (1 + |proj|)
-        sq = (proj * proj) / (1.0 + torch.abs(proj))
+        # Norm-based saturation (geometrically consistent)
+        # Prevents explosion while preserving vector structure
+        norm = torch.norm(proj, dim=-1, keepdim=True)
+        scale = 1.0 / (1.0 + norm)  # Soft saturation based on total magnitude
+        sq = (proj * proj) * scale
         
         out = torch.matmul(sq, self.W.t()) # [batch, dim]
         
@@ -71,8 +85,16 @@ class LowRankChristoffel(nn.Module):
             out = out * (1.0 + modulation)
             
         # Stability: Tight clamp prevents "exploding" curvature
-        # This is CRITICAL for long-term training stability
-        return torch.clamp(out, -self.clamp_val, self.clamp_val)
+        out = torch.clamp(out, -self.clamp_val, self.clamp_val)
+        
+        # Adaptive Gating (The Valve)
+        # If x is "stable", gate closes (0) -> No curvature -> Inertial Coasting
+        # If x needs adjustment, gate opens (1) -> Full geometry
+        if x is not None:
+            gate = torch.sigmoid(self.gate_proj(x)) # [batch, dim]
+            out = out * gate
+            
+        return out
 
 class SymplecticIntegrator(nn.Module):
     r"""
@@ -98,37 +120,27 @@ class SymplecticIntegrator(nn.Module):
         """
         dt = self.dt * dt_scale
         
-        
+        # Pure Symplectic Integration (NO friction in integrator)
         # Acceleration at t
-        gamma_term = self.christoffel(v, x)
-        acc_t = -gamma_term
+        gamma_t = self.christoffel(v, x)
+        acc_t = -gamma_t
         if force is not None:
             acc_t = acc_t + force
-            
-        # Half step velocity
-        v_half = v + 0.5 * acc_t * dt
         
-        # Full step position
-        x_next = x + v_half * dt
+        # Half-kick
+        v_half = v + 0.5 * dt * acc_t
         
-        # New acceleration (using v_half as approximation for velocity at t+1 for Gamma)
-        # In strict geodesic, Gamma depends on position x_next (metric at x_next).
-        # But our Global LowRankChristoffel assumes constant curvature field or implicit dependency.
-        # If we want state-dependent curvature, ChristoffelParametrization should interpret 'x'.
-        # For simplicity/efficiency as per paper "Global/Local metric", we assume 
-        # local metric is predicted or Gamma is computed globally or from hidden state.
-        # Let's assume standard GFN where Gamma might be somewhat constant or we just use v_half.
+        # Full-drift
+        x_next = x + dt * v_half
         
-        # Re-eval gamma at new state (using x_next for dynamic curvature)
-        gamma_term_next = self.christoffel(v_half, x_next) 
-        acc_next = -gamma_term_next
+        # Acceleration at t+1
+        gamma_next = self.christoffel(v_half, x_next)
+        acc_next = -gamma_next
         if force is not None:
-            # Force might be constant for the step or depend on x (e.g. potential gradient)
-            # Assuming constant force from input token for this step
             acc_next = acc_next + force
-            
-        # Full step velocity
-        v_next = v_half + 0.5 * acc_next * dt
+        
+        # Half-kick
+        v_next = v_half + 0.5 * dt * acc_next
         
         return x_next, v_next
 
