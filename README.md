@@ -88,9 +88,9 @@ for x, y in dataloader:
 | **Model** | **Steps to Convergence** | **Final Loss** | **Training Time** | **Final Accuracy** |
 |-----------|------------------------|---------------|------------------|-------------------|
 | **GFN** | **728** | **0.00494** | **47 min** (L=20) | **99.9%** |
-| MicroGPT | 4,000 | 0.0254 | 1h 27min (L=20) | 99.0% |
+| MicroGPT | 4,000 | 0.0254 | 1m 27s (L=20) | 99.0% |
 
-*GFN converged 5.5× faster than Transformer baseline with lower final loss*
+*GFN achieves lower loss (0.00494 vs 0.0254) and higher accuracy despite longer training time*
 
 #### Zero-Shot Generalization Results
 
