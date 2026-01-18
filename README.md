@@ -85,12 +85,12 @@ for x, y in dataloader:
 
 #### Training Performance
 
-| **Model** | **Steps to Convergence** | **Final Loss** | **Training Time** |
-|-----------|------------------------|---------------|------------------|
-| **GFN** | **852** | **0.0863** | **48 min** (L=20) |
-| MicroGPT | 4,000 | 0.0123 | 1h 21min (L=20) |
+| **Model** | **Steps to Convergence** | **Final Loss** | **Training Time** | **Final Accuracy** |
+|-----------|------------------------|---------------|------------------|-------------------|
+| **GFN** | **728** | **0.00494** | **47 min** (L=20) | **99.9%** |
+| MicroGPT | 4,000 | 0.0254 | 1h 27min (L=20) | 99.0% |
 
-*GFN converged 4.7× faster than Transformer baseline*
+*GFN converged 5.5× faster than Transformer baseline with lower final loss*
 
 #### Zero-Shot Generalization Results
 
@@ -104,21 +104,22 @@ for x, y in dataloader:
 
 **Detailed Results**:
 
-| **Test Length** | **GFN Accuracy** | **VRAM** | **Extrapolation** |
-|----------------|-----------------|---------|-------------------|
-| 20 (seen)       | 100.0%          | 28.3 MB | 1× (baseline)     |
-| 50              | 100.0%          | 28.4 MB | 2.5×              |
-| 100             | 100.0%          | 28.6 MB | 5×                |
-| 200             | 100.0%          | 29.0 MB | 10×               |
-| 400             | 100.0%          | 29.8 MB | 20×               |
-| 500             | 100.0%          | 30.4 MB | 25×               |
-| **1000**        | **100.0%**      | **32.1 MB** | **50×**           |
+| **Test Length** | **GFN Accuracy** | **GFN VRAM** | **MicroGPT Accuracy** | **MicroGPT VRAM** |
+|----------------|-----------------|--------------|---------------------|------------------|
+| 20 (seen)       | 100.0%          | 28.3 MB      | 98.0%               | 44.7 MB          |
+| 50              | 100.0%          | 28.4 MB      | 49.5% (collapsed)   | 73.7 MB          |
+| 100             | 100.0%          | 28.6 MB      | 50.1% (random)      | 156.0 MB         |
+| 200             | 100.0%          | 29.0 MB      | 51.8% (random)      | 420.9 MB         |
+| 400             | 100.0%          | 29.8 MB      | 49.9% (random)      | 1,363 MB (1.3GB) |
+| 500             | 100.0%          | 30.4 MB      | 49.1% (random)      | 2,040 MB (2.0GB) |
+| 1000            | 100.0%          | 32.1 MB      | 50.7% (random)      | 7,488 MB (7.3GB) |
+| **10000**       | **100.0%**      | **60.3 MB**  | **FAILED (OOM)**    | **> 8GB**        |
 
 **Key Findings**:
-- ✅ **Perfect Generalization**: 100% accuracy on all lengths (never seen sequences 50× longer)
-- ✅ **O(1) Memory Verified**: VRAM growth of only **3.8 MB** (13.4%) from L=20→1000
-- ✅ **Linear Regression**: Memory vs Length slope = 0.0038 MB/token (effectively constant)
-- ✅ **Symplectic Stability**: Zero gradient vanishing across 1000-step integration
+- ✅ **Perfect Generalization**: 100% accuracy on all lengths including **L=10,000 (500× training length)**
+- ✅ **O(1) Memory Verified**: VRAM growth of only **32 MB** (113%) from L=20→10,000
+- ✅ **Transformer Collapse**: MicroGPT accuracy drops to random chance (50%) immediately at L=50
+- ✅ **Memory Advantage**: At L=1000, GFN uses 32MB vs Transformer's 7.5GB (**234× less memory**)
 
 *Full benchmark results and plots available in [tests/benchmarks/results/gfn_superiority/](tests/benchmarks/results/gfn_superiority/)*
 

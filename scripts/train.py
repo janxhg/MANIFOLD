@@ -160,12 +160,20 @@ def train(model_cfg: dict, train_cfg: dict, hw_cfg: dict):
     safety.start()
     
     # Optimizer: Riemannian Adam (respects manifold geometry)
+    lr = train_params['learning_rate']
+    
+    # v2.5.0 Best Practice: Warn if LR is outside recommended range
+    if lr > 3e-4:
+        print(f"⚠️  WARNING: Learning rate {lr} is high for GFN. Recommended: 1e-4 to 3e-4")
+    elif lr < 1e-5:
+        print(f"⚠️  WARNING: Learning rate {lr} is very low. Convergence may be slow.")
+    
     optimizer = RiemannianAdam(
         model.parameters(),
-        lr=train_params['learning_rate'],
+        lr=lr,
         weight_decay=train_params['weight_decay'],
-        retraction='normalize',
-        max_norm=10.0
+        retraction='normalize',  # CRITICAL: Manifold-aware updates
+        max_norm=10.0             # Bounds weight norms to prevent manifold escape
     )
     
     # Loss: GFNLoss with Hamiltonian regularization, Curiosity & Noether
@@ -268,7 +276,8 @@ def train(model_cfg: dict, train_cfg: dict, hw_cfg: dict):
                     
                     if (batch_idx + 1) % train_params['accumulation_steps'] == 0:
                         scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), train_params['max_grad_norm'])
+                        # v2.5.0: Tighter clipping required for geometric models
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
                         scaler.step(optimizer)
                         scaler.update()
                         optimizer.zero_grad()
@@ -279,13 +288,8 @@ def train(model_cfg: dict, train_cfg: dict, hw_cfg: dict):
                     epoch_loss += loss.item()
                     
                     if (batch_idx + 1) % train_params['accumulation_steps'] == 0:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), train_params['max_grad_norm'])
-                        optimizer.step()
-                        optimizer.zero_grad()
-
-                    
-                    if (batch_idx + 1) % train_params['accumulation_steps'] == 0:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), train_params['max_grad_norm'])
+                        # v2.5.0: Tighter clipping required for geometric models
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
                         optimizer.step()
                         optimizer.zero_grad()
                 
