@@ -17,7 +17,7 @@ print("="*70)
 
 # Force compilation by importing
 try:
-    from src.cuda.ops import christoffel_fused, leapfrog_fused, CUDA_AVAILABLE
+    from gfn.cuda.ops import christoffel_fused, leapfrog_fused, CUDA_AVAILABLE
     
     if CUDA_AVAILABLE:
         print("\n✅ CUDA kernels loaded and cached!")

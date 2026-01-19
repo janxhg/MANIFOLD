@@ -26,7 +26,7 @@ pip install -e .
 Main sequence modeling architecture with Riemannian dynamics.
 
 ```python
-from src.model import Manifold
+from gfn.model import Manifold
 
 model = Manifold(
     vocab_size=50257,        # Vocabulary size
@@ -121,7 +121,7 @@ model = Manifold(..., physics_config=physics_config)
 Computes curvature (Christoffel symbols) with low-rank approximation.
 
 ```python
-from src.geometry import LowRankChristoffel
+from gfn.geometry import LowRankChristoffel
 
 christoffel = LowRankChristoffel(
     dim=512,
@@ -143,7 +143,7 @@ gamma = christoffel(v, x)  # Returns: [batch, dim]
 Leapfrog (Velocity Verlet) integrator for geodesic equation.
 
 ```python
-from src.geometry import Symplectic Integrator
+from gfn.geometry import Symplectic Integrator
 
 integrator = SymplecticIntegrator(
     christoffel_net=christoffel,
@@ -163,7 +163,7 @@ x_next, v_next = integrator(x, v, force=F, dt_scale=1.0)
 Core Manifold layer (replaces Transformer attention).
 
 ```python
-from src.layers import MLayer
+from gfn.layers import MLayer
 
 layer = MLayer(
     dim=512,
@@ -187,7 +187,7 @@ x_next, v_next, context, christoffels = layer(x, v, force, context)
 Parallel scan variant (experimental, O(log N) training).
 
 ```python
-from src.layers import ParallelMLayer
+from gfn.layers import ParallelMLayer
 
 layer = ParallelMLayer(dim=512, heads=8)
 x_out, v_out, ctx, christoffels = layer(None, None, force=force_sequence)
@@ -202,7 +202,7 @@ x_out, v_out, ctx, christoffels = layer(None, None, force=force_sequence)
 Implicit neural field embedding (O(1) w.r.t. vocabulary).
 
 ```python
-from src.embeddings import FunctionalEmbedding
+from gfn.embeddings import FunctionalEmbedding
 
 embedding = FunctionalEmbedding(
     vocab_size=50257,
@@ -229,7 +229,7 @@ emb = embedding(input_ids)  # [batch, seq_len, emb_dim]
 Geometry-aware Adam optimizer with manifold retraction.
 
 ```python
-from src.optim import RiemannianAdam
+from gfn.optim import RiemannianAdam
 
 optimizer = RiemannianAdam(
     model.parameters(),
@@ -281,8 +281,8 @@ model = Manifold(**config['model'])
 
 ```python
 import torch
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 
 # Model
 model = Manifold(vocab_size=1000, dim=256, depth=6).cuda()
@@ -403,7 +403,7 @@ for layer_idx, gamma in enumerate(christoffels):
 - Binary readout mode
 - Multi-head architecture
 
-**v1.0.0**:
+**v2.5.0**:
 - Initial release
 
 ---

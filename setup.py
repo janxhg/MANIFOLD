@@ -9,8 +9,8 @@ setup(
     name='gfn_kernels',
     ext_modules=[
         CUDAExtension('gfn_kernels', [
-            'src/csrc/bindings.cpp',
-            'src/csrc/fused_ops.cu',
+            'gfn/csrc/bindings.cpp',
+            'gfn/csrc/fused_ops.cu',
         ]),
     ],
     cmdclass={

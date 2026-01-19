@@ -8,11 +8,11 @@ import yaml
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
-from src.losses import GFNLoss
+from gfn.model import Manifold
+from gfn.losses import GFNLoss
 
 def test_v1_0_unified_integration():
-    print("🚀 Testing Manifold v1.0: Unified Conscious Engine Integration...")
+    print("🚀 Testing Manifold v2.5.0: Unified Engine Integration...")
     
     # 1. Load the Unified Config
     config_path = PROJECT_ROOT / "configs" / "model" / "gfn_v1_0.yaml"

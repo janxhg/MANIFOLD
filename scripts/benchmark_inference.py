@@ -10,8 +10,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import needed modules
-from src.model import Manifold
-import src.cuda.ops
+from gfn.model import Manifold
+import gfn.cuda.ops
 
 def run_benchmark(model, device, use_cuda_kernels=True, num_steps=100, batch_size=32, seq_len=128):
     """Run inference loop and measure speed."""

@@ -53,7 +53,7 @@ You should see:
 ### Automatic Fallback
 The kernels use intelligent fallback:
 ```python
-from src.cuda.ops import christoffel_fused
+from gfn.cuda.ops import christoffel_fused
 
 # Automatically uses CUDA if available, PyTorch otherwise
 gamma = christoffel_fused(v, U, W)

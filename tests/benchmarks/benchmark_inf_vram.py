@@ -18,7 +18,7 @@ sys.path.append(str(PROJECT_ROOT))
 RESULTS_DIR = PROJECT_ROOT / 'tests' / 'benchmarks' / 'results' / 'inf_scaling'
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-from src.model import Manifold
+from gfn.model import Manifold
 
 def measure_vram(vocab_size, embedding_type, readout_type='standard', device='cuda'):
     """

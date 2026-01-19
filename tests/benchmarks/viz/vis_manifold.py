@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from tests.benchmarks.bench_utils import measure_peak_memory
 # Import centralized VRAM utility
 from tests.benchmarks.bench_utils import measure_peak_memory
-from src.model import Manifold
+from gfn.model import Manifold
 
 def visualize_curvature(checkpoint_path):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Use CUDA if available for accurate VRAM

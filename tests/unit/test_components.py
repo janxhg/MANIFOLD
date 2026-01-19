@@ -7,10 +7,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.layers import MLayer, RiemannianGating
-from src.model import Manifold
-from src.optim import RiemannianAdam
-from src.losses import GFNLoss
+from gfn.layers import MLayer, RiemannianGating
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
+from gfn.losses import GFNLoss
 
 class TestManifoldComponents(unittest.TestCase):
     def setUp(self):

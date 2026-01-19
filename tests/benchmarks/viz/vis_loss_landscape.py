@@ -23,7 +23,7 @@ import os
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
+from gfn.model import Manifold
 # Import centralized VRAM utility
 from tests.benchmarks.bench_utils import measure_peak_memory
 

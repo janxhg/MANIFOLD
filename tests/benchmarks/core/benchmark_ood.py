@@ -10,7 +10,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.math_dataset import MathDataset
-from src import GFN
+from gfn import GFN
 try:
     from tests.benchmarks.baselines import MicroGPT
 except ImportError:

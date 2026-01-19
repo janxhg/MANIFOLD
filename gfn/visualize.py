@@ -1,7 +1,7 @@
 import torch
 import matplotlib.pyplot as plt
-from src.model import Manifold
-from src.math_dataset import MathDataset
+from gfn.model import Manifold
+from gfn.math_dataset import MathDataset
 
 def visualize_gating(model_path, test_str="88+11="):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

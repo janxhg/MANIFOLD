@@ -16,8 +16,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import Models
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 
 class ParityTask:
     """Parity Check Task (Cumulative XOR)"""

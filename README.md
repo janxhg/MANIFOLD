@@ -45,8 +45,8 @@ pip install -e "."
 ## Quick Start
 
 ```python
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 
 # Model
 model = Manifold(

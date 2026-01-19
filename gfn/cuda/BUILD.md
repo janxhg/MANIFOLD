@@ -34,7 +34,7 @@ scons -c
 ## Option 2: PyTorch JIT (Current Default)
 
 ### How it works
-- Automatic compilation on first `import src.cuda.ops`
+- Automatic compilation on first `import gfn.cuda.ops`
 - Uses `torch.utils.cpp_extension.load()`
 - Caches in `~/.cache/torch_extensions/`
 

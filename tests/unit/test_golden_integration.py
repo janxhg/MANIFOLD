@@ -6,7 +6,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from src.layers import MLayer
+from gfn.layers import MLayer
 
 class TestGoldenIntegration(unittest.TestCase):
     def test_mlayer_rk45_init(self):

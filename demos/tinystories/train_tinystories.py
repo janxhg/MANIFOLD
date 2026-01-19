@@ -12,8 +12,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 import yaml
 import argparse
 

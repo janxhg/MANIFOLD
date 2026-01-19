@@ -78,7 +78,7 @@ g_ij(x) ≈ δ_ij + Σ_r λ_r(x) u_r^i u_r^j
 
 Then Christoffel symbols simplify via chain rule to the low-rank form above.
 
-**Code Verification** (src/geometry.py:47-97):
+**Code Verification** (gfn/geometry.py:47-97):
 ```python
 proj = torch.matmul(v, self.U)  # [batch, rank]
 norm = torch.norm(proj, dim=-1, keepdim=True)
@@ -101,7 +101,7 @@ To prevent over-correction during stable phases, we introduce state-dependent mo
 
 **Rationale**: Allows the model to "coast" inertially when no geometric adjustment is needed, critical for tasks requiring pure state propagation (e.g., cumulative XOR).
 
-**Code Verification** (src/geometry.py:90-95):
+**Code Verification** (gfn/geometry.py:90-95):
 ```python
 gate = torch.sigmoid(self.gate_proj(x))
 out = out * gate
@@ -163,7 +163,7 @@ v_{t+1} = v_{t+½} + ½ Δτ · a_{t+1}
 
 **Key Property**: Error is O(Δτ³) per step, O(Δτ²) globally.
 
-**Code Verification** (src/geometry.py:121-145):
+**Code Verification** (gfn/geometry.py:121-145):
 ```python
 gamma_t = self.christoffel(v, x)
 acc_t = -gamma_t + force
@@ -188,7 +188,7 @@ v_normalized = v_raw / (||v_raw|| + ε)
 - Controls **magnitude** (prevents explosion)  
 - Acts as "friction-free damping" (stabilizes without energy loss)
 
-**Code Verification** (src/layers.py:292-293):
+**Code Verification** (gfn/layers.py:292-293):
 ```python
 v_h = v_h / (torch.norm(v_h, dim=-1, keepdim=True) + 1e-6)
 ```
@@ -222,7 +222,7 @@ Where:
 E(token_id=0) = 0
 ```
 
-**Implementation** (src/embeddings.py:189-199):
+**Implementation** (gfn/embeddings.py:189-199):
 ```python
 active_mask = (bits.float().sum(dim=-1, keepdim=True) > 0).float()
 out = out * active_mask
@@ -276,7 +276,7 @@ W_new = Retract(W_temp)
    ```
    Where A = W^T - W (skew-symmetric component).
 
-**Code Verification** (src/optim.py:105-112):
+**Code Verification** (gfn/optim.py:105-112):
 ```python
 p.data.add_(step_direction, alpha=-lr)
 norm = p.data.norm()
@@ -329,7 +329,7 @@ x_out = W_mix_x · concat(x₁', ..., x_H')
 v_out = W_mix_v · concat(v₁', ..., v_H')
 ```
 
-**Code Verification** (src/layers.py:250-270):
+**Code Verification** (gfn/layers.py:250-270):
 ```python
 x_heads = x_norm.chunk(self.heads, dim=-1)
 v_heads = v_norm.chunk(self.heads, dim=-1)
@@ -672,7 +672,7 @@ I_max ≈ 256 · 4.3 ≈ 1100 bits
 **1. Computational Speed**:
 - Training: ~3.4s/iteration (vs ~0.02s for Transformers)  
 - Cause: Sequential Christoffel computation  
-- Solution: CUDA kernel fusion (in development, see src/csrc/)
+- Solution: CUDA kernel fusion (in development, see gfn/cgfn/)
 
 **2. Copy Task Performance**:
 - Transformers excel at verbatim memorization  
@@ -741,9 +741,9 @@ The Parity task results provide strong evidence that **geometric inductive biase
 ### 14.2 Code Availability
 - **Repository**: https://github.com/Manifold-Laboratory/manifold  
 - **Benchmarks**: `tests/benchmarks/viz/vis_gfn_superiority.py`  
-- **Model**: `src/model.py`  
-- **Geometry**: `src/geometry.py`  
-- **Optimizer**: `src/optim.py`
+- **Model**: `gfn/model.py`  
+- **Geometry**: `gfn/geometry.py`  
+- **Optimizer**: `gfn/optim.py`
 
 ### 14.3 Reproducibility Checklist
 ✓ All hyperparameters documented  

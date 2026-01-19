@@ -24,7 +24,7 @@ if torch.cuda.is_available():
 print("\n🔧 Attempting to load CUDA kernels...")
 
 try:
-    from src.cuda.ops import christoffel_fused, leapfrog_fused, CUDA_AVAILABLE
+    from gfn.cuda.ops import christoffel_fused, leapfrog_fused, CUDA_AVAILABLE
     
     if CUDA_AVAILABLE:
         print("✅ CUDA kernels loaded successfully!")

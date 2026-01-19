@@ -6,7 +6,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from src.geometry import LowRankChristoffel, DormandPrinceIntegrator
+from gfn.geometry import LowRankChristoffel, DormandPrinceIntegrator
 
 class TestAdaptivePhysics(unittest.TestCase):
     def test_dormand_prince_integration(self):

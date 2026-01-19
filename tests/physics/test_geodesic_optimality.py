@@ -22,8 +22,8 @@ from sklearn.decomposition import PCA
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src import GFN
-from src.geometry import LowRankChristoffel
+from gfn import GFN
+from gfn.geometry import LowRankChristoffel
 
 
 class GeodesicOptimalityTester:

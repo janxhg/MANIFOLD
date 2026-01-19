@@ -10,7 +10,7 @@ from collections import Counter
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-from src.model import Manifold
+from gfn.model import Manifold
 
 class SimpleVocab:
     def __init__(self, tokens, min_freq=3):
@@ -140,7 +140,7 @@ def main():
         "the united states",
         "in the year",
         "the president of",
-        "artificial intelligence",
+        "deep learning model",
         "the theory of"
     ]
     

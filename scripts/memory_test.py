@@ -1,6 +1,6 @@
 import torch
 import time
-from src.model import GFN
+from gfn.model import GFN
 
 def run_memory_trial(model, vocab_size, context_len, device):
     """

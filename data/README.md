@@ -10,7 +10,7 @@ Training datasets for MANIFOLD.
 ## Usage
 
 ```python
-from src.math_dataset import MathDataset
+from gfn.math_dataset import MathDataset
 
 dataset = MathDataset(file_path='data/math_10k.txt', max_digits=2)
 ```

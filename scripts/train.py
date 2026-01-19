@@ -24,9 +24,10 @@ import sys
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src import Manifold, GFNLoss, RiemannianAdam
-from src.math_dataset import MathDataset
-from src.safety import GPUMonitor
+from gfn import Manifold, GFNLoss, RiemannianAdam
+from gfn.math_dataset import MathDataset
+from gfn.mixed_dataset import MixedHFDataset
+from gfn.safety import GPUMonitor
 
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.math_dataset import MathDataset
+from gfn.math_dataset import MathDataset
 import tqdm
 
 def generate_samples(output_file, count=1000):

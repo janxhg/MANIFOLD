@@ -7,7 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.layers import FractalMLayer
+from gfn.layers import FractalMLayer
 
 def test_fractal_tunneling_activation():
     print("Testing Fractal Tunneling Activation...")

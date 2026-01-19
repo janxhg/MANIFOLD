@@ -10,7 +10,8 @@ import sys
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.geometry import LowRankChristoffel, HeunIntegrator, RK4Integrator, LeapfrogIntegrator, SymplecticIntegrator
+from gfn.model import Manifold
+from gfn.geometry import LeapfrogIntegrator, SymplecticIntegrator
 
 def run_strict_benchmark():
     print("[*] Running STRICT Symplectic Benchmark (Bypassing LayerNorm)...")

@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 import time
-from src.model import GFN
-from src.geometry import LowRankChristoffel, SymplecticIntegrator, RK4Integrator
-from src.layers import GLayer
+from gfn.model import GFN
+from gfn.geometry import LowRankChristoffel, SymplecticIntegrator, RK4Integrator
+from gfn.layers import GLayer
 
 def benchmark_component(name, func, iter=500):
     # Warmup

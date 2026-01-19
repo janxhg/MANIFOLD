@@ -7,8 +7,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
-from src.adjoint import AdjointManifold
+from gfn.model import Manifold
+from gfn.adjoint import AdjointManifold
 
 def test_mechanics():
     print("=== MANIFOLD MECHANICS VERIFICATION ===")

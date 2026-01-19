@@ -59,7 +59,7 @@ Issues = "https://github.com/Manifold-Laboratory/manifold/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*", "configs*"]
+include = ["gfn*", "configs*"]
 namespaces = false
 
 [tool.black]

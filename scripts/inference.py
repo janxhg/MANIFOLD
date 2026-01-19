@@ -6,8 +6,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import GFN
-from src.math_dataset import MathDataset
+from gfn.model import GFN
+from gfn.math_dataset import MathDataset
 
 def chat_with_gfn(model_path):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

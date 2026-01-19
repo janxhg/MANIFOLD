@@ -14,8 +14,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import Models
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 from tests.benchmarks.baselines import MicroGPT
 from tests.benchmarks.bench_utils import measure_peak_memory
 

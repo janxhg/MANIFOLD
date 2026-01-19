@@ -11,7 +11,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
 
-from src.geometry import LowRankChristoffel, LeapfrogIntegrator
+from gfn.geometry import LowRankChristoffel, LeapfrogIntegrator
 
 def test_christoffel_correctness():
     """Test that CUDA Christoffel matches PyTorch version."""

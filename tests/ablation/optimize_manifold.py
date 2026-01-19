@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import Manifold and Task
-from src.model import Manifold
+from gfn.model import Manifold
 
 class SortingTask:
     def __init__(self, vocab_size=100, length=10):

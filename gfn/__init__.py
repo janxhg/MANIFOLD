@@ -11,16 +11,16 @@ Available Integrators:
     - LeapfrogIntegrator: Störmer-Verlet, best symplectic
 
 Usage:
-    from src import GFN
+    from gfn import GFN
     model = GFN(vocab_size=16, dim=512, depth=12, rank=128, integrator_type='heun')
     
     # Physics-informed training:
-    from src import GFNLoss, RiemannianAdam
+    from gfn import GFNLoss, RiemannianAdam
     criterion = GFNLoss(lambda_h=0.01)
     optimizer = RiemannianAdam(model.parameters(), lr=1e-3)
 """
 
-__version__ = "1.0.0"
+__version__ = "2.5.0"
 __author__ = "Manifold Laboratory (Joaquín Stürtz)"
 
 # Core Model

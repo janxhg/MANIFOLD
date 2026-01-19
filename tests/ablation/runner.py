@@ -18,8 +18,8 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
-from src.losses import GFNLoss
+from gfn.model import Manifold
+from gfn.losses import GFNLoss
 
 class ExperimentRunner:
     """

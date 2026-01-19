@@ -11,7 +11,7 @@ import random
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
+from gfn.model import Manifold
 
 class SortingTask:
     def __init__(self, vocab_size=100, length=10):
@@ -90,7 +90,7 @@ def run():
     # Enable HyperChristoffel
     physics_conf = {
         'active_inference': {'enabled': True, 'reactive_curvature': {'enabled': True, 'plasticity': 0.05}},
-        'hyper_curvature': {'enabled': True} # <--- THIS IS THE MAGIC
+        'hyper_curvature': {'enabled': True} # Critical for sorting stability
     }
     
     print("Initializing Manifold with Hyper-Christoffel (Cognitive Engine)...")

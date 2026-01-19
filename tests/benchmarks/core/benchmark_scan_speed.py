@@ -6,7 +6,7 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from src.model import Manifold
+from gfn.model import Manifold
 
 def benchmark():
     print("=" * 60)

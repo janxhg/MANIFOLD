@@ -17,8 +17,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src import GFN, GFNLoss, RiemannianAdam
-from src.geometry import LowRankChristoffel, HeunIntegrator, LeapfrogIntegrator
+from gfn import GFN, GFNLoss, RiemannianAdam
+from gfn.geometry import LowRankChristoffel, HeunIntegrator, LeapfrogIntegrator
 
 
 class TestCoreArchitecture:

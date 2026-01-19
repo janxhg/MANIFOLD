@@ -11,7 +11,7 @@ from sklearn.manifold import TSNE
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
+from gfn.model import Manifold
 from tests.benchmarks.bench_utils import measure_peak_memory
 
 def verify_noether_symmetries(checkpoint_path):

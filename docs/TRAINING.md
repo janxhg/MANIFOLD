@@ -13,8 +13,8 @@ Complete guide for training MANIFOLD models, from quick start to advanced optimi
 
 ```python
 import torch
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 
 # Model
 model = Manifold(vocab_size=1000, dim=256, depth=6, heads=4).cuda()
@@ -167,7 +167,7 @@ Standard Adam performs Euclidean updates that violate manifold constraints, caus
 ### Configuration
 
 ```python
-from src.optim import RiemannianAdam
+from gfn.optim import RiemannianAdam
 
 optimizer = RiemannianAdam(
     model.parameters(),
@@ -273,8 +273,8 @@ total_loss = task_loss + 0.01 * energy_loss
 ```python
 import torch
 from torch.utils.data import DataLoader
-from src.model import Manifold
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
 from torch.optim.lr_scheduler import OneCycleLR
 
 # Setup

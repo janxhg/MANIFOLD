@@ -6,8 +6,8 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from src.geometry import LowRankChristoffel
-from src.layers import MLayer, ParallelMLayer
+from gfn.geometry import LowRankChristoffel
+from gfn.layers import MLayer, ParallelMLayer
 
 class TestGeometricEnhancements(unittest.TestCase):
     def test_dynamic_curvature_modulation(self):

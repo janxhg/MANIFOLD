@@ -8,8 +8,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.geometry import ReactiveChristoffel, TimeDilationHead
-from src.model import Manifold
+from gfn.geometry import ReactiveChristoffel, TimeDilationHead
+from gfn.model import Manifold
 
 class TestActivePhysics(unittest.TestCase):
     

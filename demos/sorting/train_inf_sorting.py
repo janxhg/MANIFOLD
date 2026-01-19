@@ -14,9 +14,9 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-from src.model import Manifold
-from src.optim import RiemannianAdam
-from src.embeddings import FunctionalEmbedding 
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
+from gfn.embeddings import FunctionalEmbedding 
 
 class CausalSortingDataset(Dataset):
     def __init__(self, num_samples, seq_len, vocab_size=100):

@@ -5,9 +5,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.model import Manifold
-from src.losses import GFNLoss
-from src.optim import RiemannianAdam
+from gfn.model import Manifold
+from gfn.losses import GFNLoss
+from gfn.optim import RiemannianAdam
 
 def test_overfit_rtx_config():
     print("=== DIAGNOSIS: OVERFIT SINGLE BATCH (RTX CONFIG) ===")
