@@ -14,10 +14,116 @@ from tqdm import tqdm
 # Add project root
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from gfn.model import Manifold
+from gfn.optim import RiemannianAdam
+from gfn.losses import hamiltonian_loss, curiosity_loss, geodesic_regularization
+import random
 
-from src.model import Manifold
+# ... (Dataset class same)
 
-# === 1. Synthetic Task: Fractal Associative Recall ===
+# ...
+
+def train_showcase():
+    # ... (Setup same)
+    
+    # Use Riemannian Optimizer (Geometry-Aware)
+    optimizer = RiemannianAdam(model.parameters(), lr=3e-4, weight_decay=0.01)
+    
+    # Task Loss: O(1) MSE
+    task_criterion = nn.MSELoss() 
+    
+    # Physics Loss Config
+    lambda_h = 0.01 # energy conservation
+    lambda_c = 0.05 # curiosity
+    lambda_g = 0.001 # smooth curvature
+    
+    # Metrics Tracking
+    history = {
+        "loss": [],
+        "mse": [],
+        "hamiltonian": [],
+        "curiosity": [],
+        "energy_drift": [],
+    }
+    
+    print("\n[*] Training Phase: Learning Recursive Associative Recall...")
+    model.train()
+    
+    pbar = tqdm(range(steps))
+    data_iter = iter(loader)
+    
+    for step in pbar:
+        try:
+            inputs, targets = next(data_iter)
+        except StopIteration:
+            data_iter = iter(loader)
+            inputs, targets = next(data_iter)
+            
+        inputs, targets = inputs.to(device), targets.to(device)
+        
+        optimizer.zero_grad()
+        
+        # Forward Pass
+        # Returns logits, state, AND physics metadata (christoffels, velocities if tracked)
+        # Note: Manifold.forward returns (logits, state, christoffels).
+        # We need to ensure we access velocities for Hamiltonian loss.
+        # Currently Manifold forward returns: logits, (x_final, v_final), all_christoffels
+        # To get FULL velocity history for Hamiltonian loss, the model needs to return it.
+        # Standard Manifold.forward DOES NOT return full velocity history in sequential mode (only final).
+        # However, for 'showcase', we want to demonstrate it.
+        # Let's rely on standard forward output for now.
+        
+        logits, (x_final, v_final), christoffels = model(inputs) 
+        
+        # === 1. Task Loss (O(1)) ===
+        pred_coords = logits  # [B, L, 32]
+        
+        # We need target COORDS (32-d) to match predictions.
+        # model.embedding() returns 512-d vectors. We need the raw 32-d binary codes.
+        lm_targets = inputs[:, 1:] 
+        
+        # Replicate Binary Functional Logic
+        coord_dim = 32
+        mask = 2**torch.arange(coord_dim).to(device)
+        bits = (lm_targets.unsqueeze(-1) & mask) > 0
+        target_coords = bits.float() * 2 - 1 # [B, L-1, 32]
+
+        pred_coords_shifted = pred_coords[:, :-1, :] # [B, L-1, 32]
+        
+        loss_mse = task_criterion(pred_coords_shifted, target_coords)
+        total_loss = loss_mse
+        
+        # === 2. Physics Losses (The "Secret Sauce") ===
+        # Note: Hamiltonian loss requires a sequence of velocities.
+        # Our current Manifold.forward only returns the *final* state tuple.
+        # To compute H-Loss properly, we would need the full trace.
+        # For this showcase, we will calculate Hamiltonian loss on the Batch Variance (Curiosity)
+        # and Geodesic Regularization on the Christoffel symbols we DO have.
+        
+        # Geodesic Reg (Penalize black holes)
+        if christoffels:
+             l_g = geodesic_regularization(None, christoffels, lambda_g)
+             total_loss += l_g
+             
+        # Curiosity (Maximize Entropy of final velocity)
+        if v_final is not None:
+             l_c = curiosity_loss([v_final], lambda_c)
+             total_loss += l_c
+             
+        # Hamiltonian: Approximate using Start vs End energy?
+        # Exact H-loss needs steps. We'll skip exact H-loss in this specific run.
+             
+        loss = total_loss
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        
+        history["loss"].append(loss.item())
+        history["mse"].append(loss_mse.item())
+        
+        desc = f"Loss: {loss.item():.4f} | MSE: {loss_mse.item():.4f}"
+        if christoffels: desc += f" | Curv: {l_g.item():.4f}"
+        pbar.set_description(desc)
 class FractalRecallDataset(torch.utils.data.Dataset):
     """
     Generates sequences with nested dependencies and high-energy noise.
@@ -89,6 +195,7 @@ class FractalRecallDataset(torch.utils.data.Dataset):
         
         return input_tensor, target_tensor
 
+
 # === 2. Training Script ===
 def train_showcase():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -102,13 +209,18 @@ def train_showcase():
     dataset = FractalRecallDataset(vocab_size)
     loader = torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=True)
     
-    # Manifold Setup with FULL Physics
+    # Manifold Setup with FULL Physics + INFINITE Features
     model = Manifold(
         vocab_size=vocab_size,
         dim=512,
         depth=6,     # Deep enough for recursion
         heads=8,
         physics_config={
+            # Infinite Features (O(1) Memory Claims)
+            "embedding": {"type": "functional", "mode": "binary", "coord_dim": 32},
+            "readout": {"type": "implicit", "coord_dim": 32}, # O(1) Enabled
+            
+            # Cognitive Physics
             "active_inference": {"enabled": True, "plasticity": 0.1},
             "fractal": {"enabled": True, "threshold": 0.4}, # Sensitive fractal trigger
             "symmetries": {"enabled": True},
@@ -116,8 +228,11 @@ def train_showcase():
         }
     ).to(device)
     
-    optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.01)
-    criterion = nn.CrossEntropyLoss()
+    # Use Riemannian Optimizer (Geometry-Aware)
+    optimizer = RiemannianAdam(model.parameters(), lr=3e-4, weight_decay=0.01)
+    
+    # For O(1) Implicit Readout, we regress coordinates, not logits
+    criterion = nn.MSELoss() 
     
     # Metrics Tracking
     history = {
@@ -145,42 +260,30 @@ def train_showcase():
         optimizer.zero_grad()
         
         # Forward Pass
-        # We need the output at the last position used for query
-        # Currently inputs are full sequences.
-        logits, _, _ = model(inputs) # [B, T, V]
+        # logits are [Batch, Seq, CoordDim] because of Implicit Readout
+        pred_coords, _, _ = model(inputs) 
         
-        # We find the index of the last token (before padding) or just take the known structure
-        # In our simplified synthetic data, the Query is at the end of the semantic sequence.
-        # Let's target the last non-pad prediction.
+        # Target Preparation for O(1) Loss
+        # We need the ground truth coordinates for the target tokens (32-d)
+        # Target tensor is next-token for Causal LM: inputs shifted by 1
+        lm_targets = inputs[:, 1:] # [B, T-1]
         
-        # For this specific synthetic task, we want P(val | query, key)
-        # The query is the second to last token in the effective sequence 
-        # (before padding zeros start).
-        # We'll just define target selection simply: Predict based on last non-zero.
+        # O(1) Target Gen: ID -> Binary -> {-1, 1}
+        coord_dim = 32
+        mask = 2**torch.arange(coord_dim).to(device)
+        bits = (lm_targets.unsqueeze(-1) & mask) > 0
+        target_coords = bits.float() * 2 - 1 # [B, T-1, 32]
+             
+        # Align predictions (drop last to match)
+        pred_coords_shifted = pred_coords[:, :-1, :] # [B, T-1, 32]
         
-        # Simplified: Just train standard Causal LM on the sequence, but monitor specific recall?
-        # Better: Train on the whole sequence to learn the structure [ ] { } too.
-        
-        # Shift targets for Causal LM
-        # But we really care about the final answer accuracy.
-        
-        B, T, V = logits.shape
-        flat_logits = logits.view(-1, V)
-        flat_targets = inputs.view(-1) # Self-supervised next token
-        
-        # We actually want to predict the 'target' value at the end.
-        # Let's assume standard LM training 80% and 20% forced recall on the last token.
-        loss_lm = criterion(flat_logits[:-1], flat_targets[1:])
-        
-        # Extract last logic for "Recall Accuracy"
-        # We look at the token generated AFTER the query pair.
-        # In this dataset, the efficient length varies.
-        # Let's stick to pure LM loss for simplicity, it implies recall.
-        
-        loss = loss_lm
+        loss = criterion(pred_coords_shifted, target_coords)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+        
+        # Metrics recording happens next
+        # (Cleaned up legacy code)
         
         # Physics Metrics (Introspection)
         # We check the internal states of the first layer

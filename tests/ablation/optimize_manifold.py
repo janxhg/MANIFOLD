@@ -92,7 +92,7 @@ class ExperimentRunner:
         # But wait, GFNLoss is in src/losses.py. 
         # For this ablation, we want to test GFNLoss components.
         
-        from src.losses import GFNLoss
+        from gfn.losses import GFNLoss
         criterion = GFNLoss(
             lambda_h=config.get('lambda_h', 0.01),
             lambda_g=config.get('lambda_g', 0.001),
@@ -232,10 +232,25 @@ class ExperimentRunner:
         print(f"📋 Starting Grid Search with {len(configs)} configurations...")
         
         for i, cfg in enumerate(configs):
-            res = self.train_single_run(cfg, i)
-            results.append(res)
+            try:
+                res = self.train_single_run(cfg, i)
+                results.append(res)
+            except Exception as e:
+                print(f"❌ Run {i} ({cfg['name']}) FAILED: {e}")
+                # Append a failed result placeholder so we can still report
+                results.append({
+                    'config': cfg,
+                    'final_accuracy': 0.0,
+                    'duration_seconds': 0.0,
+                    'steps_to_90_acc': None,
+                    'history': {'step': [], 'accuracy': []},
+                    'error': str(e)
+                })
             
-        self.generate_report(results)
+        if results:
+            self.generate_report(results)
+        else:
+            print("❌ No results to report.")
         
     def generate_report(self, results):
         print("\n📊 Generating Professional Report...")
@@ -248,9 +263,10 @@ class ExperimentRunner:
                 'Name': cfg['name'],
                 'Integrator': cfg['integrator'],
                 'Scan': cfg['use_scan'],
-                'Accuracy': r['final_accuracy'],
-                'Steps to 90%': r['steps_to_90_acc'] if r['steps_to_90_acc'] else "> Max",
-                'Duration (s)': f"{r['duration_seconds']:.1f}"
+                'Accuracy': r.get('final_accuracy', 0.0),
+                'Steps to 90%': r.get('steps_to_90_acc', "> Max"),
+                'Duration (s)': f"{r.get('duration_seconds', 0.0):.1f}",
+                'Status': 'FAILED' if 'error' in r else 'OK'
             })
             
         df = pd.DataFrame(summary_data)
@@ -261,23 +277,32 @@ class ExperimentRunner:
         df.to_csv(self.run_dir / "summary_results.csv", index=False)
         
         # 2. Plotting Learning Curves
+        # Check if we have any valid history to plot
+        valid_results = [r for r in results if 'error' not in r and r['history']['step']]
+        
+        if not valid_results:
+            print("⚠️ No valid training history to plot.")
+            return
+
         plt.figure(figsize=(12, 8))
         sns.set_style("whitegrid")
+        palette = sns.color_palette("deep", len(valid_results))
         
-        for r in results:
+        for i, r in enumerate(valid_results):
             steps = r['history']['step']
             accs = r['history']['accuracy']
-            plt.plot(steps, accs, label=r['config']['name'], linewidth=2, alpha=0.8)
+            if steps and accs:
+                plt.plot(steps, accs, label=r['config']['name'], linewidth=2.5, alpha=0.8, marker='o', markersize=4, color=palette[i])
             
-        plt.title("Manifold Component Ablation: Learning Dynamics", fontsize=16)
+        plt.title("Manifold Component Ablation: Learning Dynamics", fontsize=16, fontweight='bold')
         plt.xlabel("Training Steps", fontsize=12)
         plt.ylabel("Sorting Accuracy (Exact Match)", fontsize=12)
-        plt.legend()
-        plt.grid(True, alpha=0.3)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.grid(True, linestyle='--', alpha=0.5)
         plt.tight_layout()
         
         plot_path = self.run_dir / "ablation_curves.png"
-        plt.savefig(plot_path, dpi=300)
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         print(f"\n📈 Comparison Plot saved to: {plot_path}")
         
 if __name__ == '__main__':

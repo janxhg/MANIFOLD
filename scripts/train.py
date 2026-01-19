@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from gfn import Manifold, GFNLoss, RiemannianAdam
+from gfn.losses import hamiltonian_loss, curiosity_loss, geodesic_regularization
 from gfn.math_dataset import MathDataset
 from gfn.mixed_dataset import MixedHFDataset
 from gfn.safety import GPUMonitor
@@ -46,33 +47,35 @@ def setup_device(hw_cfg: dict) -> torch.device:
 
 
 def build_model(model_cfg: dict, device: torch.device) -> nn.Module:
-    """Instantiate Manifold model from config."""
+    """Instantiate Manifold model."""
     cfg = model_cfg['model']
     
-    # Check if we should use the O(1) memory Adjoint version
-    if cfg.get('use_adjoint', False):
-        from src.adjoint import AdjointManifold, HAS_TORCHDIFFEQ
-        if HAS_TORCHDIFFEQ:
-            print("Initializing AdjointManifold (O(1) Memory Mode)")
-            model = AdjointManifold(
-                vocab_size=cfg['vocab_size'],
-                dim=cfg['dim'],
-                depth=cfg['depth'],
-                rank=cfg['rank']
-            )
-            return model.to(device)
-        else:
-            print("Warning: use_adjoint=True but torchdiffeq missing. Falling back to Standard Manifold.")
+    # Physics configuration for Implicit Readout/Functional Embedding
+    physics_config = {
+        "embedding": {"type": "functional", "mode": "binary", "coord_dim": 32},
+        "readout": {"type": "implicit", "coord_dim": 32},
+        "active_inference": {
+            "enabled": True, 
+            "plasticity": 0.1,
+            "dynamic_time": {"enabled": True}
+        },
+        "fractal": {"enabled": True, "threshold": 0.5},
+        "singularities": {"enabled": True, "strength": 5.0},
+        "symmetries": {"enabled": True}
+    }
+    
+    if 'physics_config' in cfg:
+        physics_config.update(cfg['physics_config'])
 
-    print("Initializing Standard Manifold (Leapfrog/Discrete Mode)")
     model = Manifold(
         vocab_size=cfg['vocab_size'],
         dim=cfg['dim'],
         depth=cfg['depth'],
         rank=cfg['rank'],
         heads=cfg.get('heads', 4),
-        integrator_type=cfg.get('integrator', 'leapfrog'),
-        use_scan=cfg.get('use_scan', True) # Default to True for speed if not specified!
+        integrator_type=cfg.get('integrator', 'leapfrog'), 
+        use_scan=cfg.get('use_scan', True),
+        physics_config=physics_config
     )
     return model.to(device)
 
@@ -123,214 +126,110 @@ def run_demo(model: nn.Module, dataset, device: torch.device):
 
 
 def train(model_cfg: dict, train_cfg: dict, hw_cfg: dict):
-    """Main training loop."""
-    # Setup
+    """Execution of the training loop."""
     device = setup_device(hw_cfg)
-    # Build model and compile
     model = build_model(model_cfg, device)
     
-    # Compilation
-    # Windows support for Inductor (Triton) is limited.
-    # We disable it by default to prevent crashes.
-    if hasattr(torch, 'compile') and os.name != 'nt':
-        print("Compiling model (PyTorch 2.0+)...")
-        model = torch.compile(model)
-    elif os.name == 'nt':
-        print("Skipping torch.compile on Windows (Triton missing)")
-        
     dataset = build_dataset(train_cfg)
-    
     train_params = train_cfg['training']
     hw_params = hw_cfg['hardware']
     
-    # Print info
-    # Note: param_count works on compiled model too
     param_count = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"\n{'='*50}")
-    print(f"GFN Training Session")
-    print(f"{'='*50}")
-    print(f"Model: {param_count:.2f}M parameters")
-    print(f"Device: {device} ({hw_params.get('gpu_name', 'Unknown')})")
-    print(f"Dataset: {train_params['dataset']} (Infinite Stream)")
-    print(f"Batch: {train_params['batch_size']} x {train_params.get('accumulation_steps', 1)} = {train_params['batch_size'] * train_params.get('accumulation_steps', 1)}")
-    print(f"LR: {train_params['learning_rate']}, WD: {train_params['weight_decay']}")
-    print(f"{'='*50}\n")
+    print(f"Model Parameters: {param_count:.2f}M")
+    print(f"Device: {device}")
     
-    # Safety monitor
-    safety = GPUMonitor(threshold_temp=hw_params.get('max_temp_c', 75))
+    safety = GPUMonitor(threshold_temp=hw_params.get('max_temp_c', 80))
     safety.start()
-    
-    # Optimizer: Riemannian Adam (respects manifold geometry)
-    lr = train_params['learning_rate']
-    
-    # v2.5.0 Best Practice: Warn if LR is outside recommended range
-    if lr > 3e-4:
-        print(f"⚠️  WARNING: Learning rate {lr} is high for GFN. Recommended: 1e-4 to 3e-4")
-    elif lr < 1e-5:
-        print(f"⚠️  WARNING: Learning rate {lr} is very low. Convergence may be slow.")
     
     optimizer = RiemannianAdam(
         model.parameters(),
-        lr=lr,
-        weight_decay=train_params['weight_decay'],
-        retraction='normalize',  # CRITICAL: Manifold-aware updates
-        max_norm=10.0             # Bounds weight norms to prevent manifold escape
+        lr=train_params.get('learning_rate', 3e-4),
+        weight_decay=train_params.get('weight_decay', 0.01),
+        retraction='normalize', 
+        max_norm=10.0
     )
     
-    # Loss: GFNLoss with Hamiltonian regularization, Curiosity & Noether
-    criterion = GFNLoss(
-        lambda_h=train_params.get('lambda_h', 0.01),  # Hamiltonian energy conservation weight
-        lambda_c=train_params.get('lambda_c', 0.0),   # Entropy-Driven Curiosity (Thermodynamics)
-        lambda_n=train_params.get('lambda_n', 0.0),   # Semantic Symmetries (Noether)
-        ignore_index=dataset.char_to_id['<PAD>']
-    )
+    task_criterion = nn.MSELoss()
     
-    # AMP
-    scaler = torch.amp.GradScaler('cuda') if train_params.get('use_amp', True) else None
+    lambda_h = train_params.get('lambda_h', 0.01)
+    lambda_c = train_params.get('lambda_c', 0.05)
+    lambda_g = train_params.get('lambda_g', 0.001)
     
-    # DataLoader
     dataloader = DataLoader(
         dataset,
         batch_size=train_params['batch_size'],
-        # shuffle=True, # NOT SUPPORTED for IterableDataset
         num_workers=hw_params.get('num_workers', 4),
-        pin_memory=hw_params.get('pin_memory', True),
+        pin_memory=True,
         collate_fn=dataset.collate_fn
     )
     
-    # Checkpoint path
     ckpt_path = Path(train_cfg['checkpoint']['path'])
     ckpt_path.mkdir(parents=True, exist_ok=True)
     
-    vocab_size = model_cfg['model']['vocab_size']
-    
-    # Resume logic
-    start_epoch = 0
-    checkpoint_files = sorted(list(ckpt_path.glob("epoch_*.pt")), key=lambda p: int(p.stem.split('_')[1]))
-    if checkpoint_files:
-        latest_ckpt = checkpoint_files[-1]
-        print(f"Resuming from checkpoint: {latest_ckpt}")
-        try:
-            checkpoint = torch.load(latest_ckpt, map_location=device)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            
-            # Allow resetting optimizer (useful when changing architecture/physics)
-            if '--reset-optimizer' in sys.argv:
-                print(">>> RESETTING OPTIMIZER STATE (New Training Phase) <<<")
-                # Keep start_epoch to maintain file numbering, or could reset if desired.
-                # Here we keep numbering to show continuity of the "model".
-                start_epoch = checkpoint['epoch'] + 1
-            else:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                start_epoch = checkpoint['epoch'] + 1
-                print(f"Resuming at Epoch {start_epoch}")
-        except RuntimeError as e:
-            print(f"\n[WARNING] Checkpoint mismatch (different model architecture?): {e}")
-            print("Ignoring checkpoint involved starting from scratch...")
-            start_epoch = 0
-
-    # Training loop
     model.train()
+    
     try:
-        for epoch in range(start_epoch, train_params['epochs']):
+        for epoch in range(train_params['epochs']):
             epoch_loss = 0.0
             epoch_t0 = time.time()
             
             for batch_idx, inputs in enumerate(dataloader):
-                if batch_idx >= train_params['steps_per_epoch']:
-                    break
-                    
+                if batch_idx >= train_params.get('steps_per_epoch', 1000): break
+                
                 safety.check()
                 inputs = inputs.to(device, non_blocking=True)
                 
-                targets = torch.roll(inputs, -1, dims=1).clone()
-                targets[:, -1] = dataset.char_to_id['<PAD>']
+                # Prepare targets for coordinate regression (next token prediction)
+                target_tokens = torch.roll(inputs, -1, dims=1)
                 
-                # Forward
-                if scaler:
-                    with torch.amp.autocast('cuda'):
-                        # Forward
-                        logits, (x_final, v_final), christoffel_outputs = model(inputs)
-                        
-                        # Get isomeric groups for Noether loss (v0.7.0)
-                        sym_cfg = model.physics_config.get('symmetries', {})
-                        iso_groups = sym_cfg.get('isomeric_groups', None)
-
-                        # Use GFNLoss with Hamiltonian, Geodesic, Curiosity and Noether regularization
-                        loss, loss_dict = criterion(
-                            logits, 
-                            targets, 
-                            velocities=[v_final],  # Pass final velocity for energy tracking
-                            christoffel_outputs=christoffel_outputs,
-                            isomeric_groups=iso_groups
-                        )
-                        
-                        if torch.isnan(loss):
-                            print("Warning: NaN loss, skipping batch.")
-                            optimizer.zero_grad()
-                            continue
-                            
-                        loss = loss / train_params['accumulation_steps']
-                    
-                    scaler.scale(loss).backward()
-                    epoch_loss += loss.item() * train_params['accumulation_steps']
-                    
-                    if (batch_idx + 1) % train_params['accumulation_steps'] == 0:
-                        scaler.unscale_(optimizer)
-                        # v2.5.0: Tighter clipping required for geometric models
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
-                        scaler.step(optimizer)
-                        scaler.update()
-                        optimizer.zero_grad()
-                else:
-                    logits, (x_final, v_final) = model(inputs)
-                    loss, loss_dict = criterion(logits, targets, velocities=[v_final])
-                    loss.backward()
-                    epoch_loss += loss.item()
-                    
-                    if (batch_idx + 1) % train_params['accumulation_steps'] == 0:
-                        # v2.5.0: Tighter clipping required for geometric models
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
-                        optimizer.step()
-                        optimizer.zero_grad()
+                # O(1) Target Generation (Accessing Binary Coordinates Directly)
+                coord_dim = 32
+                mask = 2**torch.arange(coord_dim).to(device)
+                bits = (target_tokens.unsqueeze(-1) & mask) > 0
+                target_coords = bits.float() * 2 - 1
                 
-                # Logging
-                if (batch_idx // train_params['accumulation_steps']) % train_params['log_interval'] == 0:
-                    step = batch_idx // train_params['accumulation_steps']
+                optimizer.zero_grad()
+                
+                logits, (x_final, v_final), christoffels = model(inputs)
+                
+                # Align predictions (t -> t+1)
+                pred_valid = logits[:, :-1, :]
+                targ_valid = target_coords[:, :-1, :]
+                
+                loss_mse = task_criterion(pred_valid, targ_valid)
+                total_loss = loss_mse
+                
+                # Physics regularization
+                loss_phy = 0.0
+                if christoffels:
+                    loss_phy += geodesic_regularization(None, christoffels, lambda_g)
+                    
+                if v_final is not None:
+                    loss_phy += curiosity_loss([v_final], lambda_c)
+                
+                loss = total_loss + loss_phy
+                
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                
+                if batch_idx % train_params.get('log_interval', 10) == 0:
                     dt = time.time() - epoch_t0
-                    speed = (step * train_params['batch_size'] * train_params['accumulation_steps']) / max(dt, 0.001)
-                    print(f"Epoch {epoch} | Step {step}/{train_params['steps_per_epoch']} | "
-                          f"Loss: {loss.item()*train_params['accumulation_steps']:.4f} | "
-                          f"Speed: {speed:.1f} ex/s")
+                    speed = (batch_idx * inputs.shape[0]) / max(dt, 0.01)
+                    print(f"Ep {epoch} | Step {batch_idx} | Total Loss: {loss.item():.4f} | MSE: {loss_mse.item():.4f} | Speed: {speed:.1f} tok/s")
             
-            # End of epoch
-            avg_loss = epoch_loss / train_params['steps_per_epoch']
-            epoch_time = time.time() - epoch_t0
-            print(f"\n>>> EPOCH {epoch} COMPLETE | Avg Loss: {avg_loss:.4f} | Time: {epoch_time:.2f}s")
-            if device.type == 'cuda':
-                torch.cuda.empty_cache()
+            avg_loss = epoch_loss / train_params.get('steps_per_epoch', 1000)
+            print(f"Epoch {epoch} Completed. Avg Loss: {avg_loss:.4f}")
             
-            # Demo
-            if epoch % train_params['demo_interval'] == 0:
-                run_demo(model, dataset, device)
-            
-            # Checkpoint
-            if epoch % train_cfg['checkpoint']['save_interval'] == 0:
-                ckpt_file = ckpt_path / f"epoch_{epoch}.pt"
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': avg_loss,
-                }, ckpt_file)
-                print(f"Checkpoint saved: {ckpt_file}")
-                
+            if epoch % train_cfg['checkpoint'].get('save_interval', 1) == 0:
+                torch.save(model.state_dict(), ckpt_path / f"epoch_{epoch}.pt")
+
     except KeyboardInterrupt:
-        print("\nTraining interrupted. Saving emergency checkpoint...")
         torch.save(model.state_dict(), ckpt_path / "interrupted.pt")
     finally:
         safety.stop()
-        print("Training session ended.")
 
 
 def main():
