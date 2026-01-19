@@ -30,10 +30,14 @@ Where:
 Γ^k_ij = ½ g^kℓ (∂g_jℓ/∂x^i + ∂g_iℓ/∂x^j - ∂g_ij/∂x^ℓ)
 ```
 
-**Low-Rank Approximation** (implemented):
+**Implementation (Quadratic Interaction)**:
+Instead of deriving $\Gamma$ from a metric tensor $g$ (which requires solving partial differential equations), we parameterize $\Gamma$ directly as a low-rank quadratic operator:
+
 ```
 Γ(v, x) ≈ W · [(U^T v)² ⊙ σ(||U^T v||)]
 ```
+
+This acts as a powerful mixing mechanism, allowing order-2 interactions between state features ($v_i v_j$) with $O(d)$ parameters.
 
 Parameters: U, W ∈ ℝ^(d×R), R=16-64
 
@@ -41,17 +45,18 @@ Parameters: U, W ∈ ℝ^(d×R), R=16-64
 
 ## Hamiltonian Structure
 
-**Energy Function**:
+**Pseudo-Energy Function**:
 ```
 H(x, v) = ½ v^T v + V(x)
 ```
 
-**Conservation**: Symplectic integrators ensure |ΔH| ≈ O(dt²)
+**Stability**: 
+While the system is forced (non-conservative), the symplectic integrator structure (Leapfrog) ensures phase-space volume preservation. This prevents the "vanishing/exploding gradient" problem often seen in standard RNNs, acting similarly to a ResNet with explicit momentum.
 
-**Canonical Equations**:
+**Dynamics**:
 ```
-dx/dt = ∂H/∂v = v
-dv/dt = -∂H/∂x - Γ(v,x) + F
+dx/dt = v
+dv/dt = F(token) - Γ(v, x)
 ```
 
 ---

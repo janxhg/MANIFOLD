@@ -9,13 +9,15 @@ System architecture overview and design principles for the MANIFOLD framework.
 
 ## Overview
 
-MANIFOLD is a sequence modeling architecture that replaces discrete attention mechanisms with continuous geodesic flow on a learned Riemannian manifold. The core innovation is modeling state transitions as physical particle dynamics governed by Einstein's geodesic equation.
+## Overview
+
+MANIFOLD is a sequence modeling architecture based on **Second-Order State Space Models (SSMs)**. It replaces discrete attention mechanisms with a continuous dynamical system update.
 
 **Key Properties**:
 - **O(1) Memory**: Constant-size state (x, v) regardless of sequence length
-- **Symplectic Dynamics**: Energy-conserving integration prevents gradient pathologies
-- **Geometric Learning**: Curvature encodes semantic structure
-- **Compositional**: Multi-layer manifold hierarchy
+- **Symplectic Dynamics**: Volume-preserving integration improves efficient information flow
+- **Quadratic Interactions**: Learnable "curvature" layer mixes features multiplicatively
+- **Compositional**: Multi-layer hierarchy
 
 ---
 
@@ -108,7 +110,7 @@ Output: (x_next, v_next, context_next)
 - Force F: Input token embedding
 - Context: Inter-layer communication
 
-### 3. Christoffel Symbols (Curvature)
+### 3. Quadratic Interaction Layer (Christoffel)
 
 **Mathematical Form**:
 ```
@@ -334,17 +336,17 @@ Symplectic structure ensures:
 
 ## Future Extensions
 
-### Mixture of Manifolds (MoM)
+### Mixture of Dynamics (MoM)
 
-Multiple geometry experts:
-- Euclidean (linear reasoning)
-- Hyperbolic (hierarchies)
-- Spherical (cycles)
-- Router selects geometry per token
+Multiple dynamics experts:
+- Euclidean (Linear/ResNet behavior)
+- Hyperbolic (Tree/Hierarchy specialized)
+- Spherical (Cyclic/Rotation specialized)
+- Router selects dynamics per token
 
 ### CUDA Acceleration
 
-Fused kernel implementation:
+Fused kernel implementation for the Leapfrog step:
 ```c
 __global__ void symplectic_step_fused(
     float* x, float* v, float* F,
@@ -356,12 +358,12 @@ Expected: 10-50× speedup.
 
 ### Neural ODE Integration
 
-Replace discrete layers with continuous depth:
+Replace discrete layers with continuous depth solvers:
 ```
 d(x,v)/dt = f_θ(x, v, F, t)
 ```
 
-Adaptive depth per token.
+Adaptive computation per token.
 
 ---
 
