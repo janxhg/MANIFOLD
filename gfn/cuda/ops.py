@@ -4,6 +4,8 @@ Python interface for GFN CUDA kernels with fallback to PyTorch.
 
 import torch
 import os
+import sys
+import platform
 
 # Try to load CUDA extension
 try:
@@ -12,11 +14,13 @@ try:
     # Build path
     cuda_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Ensure MSVC is in PATH for PyTorch build system
-    msvc_path = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64"
-    if os.path.exists(msvc_path) and msvc_path not in os.environ['PATH']:
-        print(f"[GFN CUDA] Adding MSVC to PATH: {msvc_path}")
-        os.environ['PATH'] = msvc_path + os.pathsep + os.environ['PATH']
+    # Platform-specific compiler setup
+    is_windows = platform.system() == 'Windows'
+    
+    if is_windows:
+        # On Windows, try to find MSVC (but don't hardcode the path)
+        # PyTorch's build system will find it automatically
+        pass
     
     # Load extension (JIT compilation on first import)
     # Try loading pre-compiled extension first
@@ -29,8 +33,16 @@ try:
             import gfn_cuda
         except ImportError:
              # Fallback to JIT compilation if pre-compiled not found
-             # (This is useful for development but fragile on Windows)
              print("[GFN CUDA] Pre-compiled extension not found, attempting JIT compilation...")
+             
+             # Platform-specific compilation flags
+             if is_windows:
+                 extra_cflags = ['/O2', '/DNOMINMAX']
+                 extra_cuda_cflags = ['-O3', '--use_fast_math']
+             else:
+                 extra_cflags = ['-O3', '-fPIC']
+                 extra_cuda_cflags = ['-O3', '--use_fast_math', '--compiler-options', "'-fPIC'"]
+             
              gfn_cuda = load(
                 name='gfn_cuda_v2_6',
                 sources=[
@@ -39,8 +51,8 @@ try:
                     os.path.join(cuda_dir, 'kernels', 'leapfrog_fused.cu'),
                     os.path.join(cuda_dir, 'kernels', 'parallel_scan_fused.cu'),
                 ],
-                extra_cuda_cflags=['-O3', '--use_fast_math', '-m64', '-ccbin', r'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\cl.exe'],
-                extra_cflags=['/DNOMINMAX', '/DWIN32_LEAN_AND_MEAN', '/Zc:twoPhase-'],
+                extra_cuda_cflags=extra_cuda_cflags,
+                extra_cflags=extra_cflags,
                 verbose=True
             )
     
