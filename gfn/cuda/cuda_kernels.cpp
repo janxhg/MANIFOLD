@@ -30,6 +30,25 @@ extern "C" void launch_christoffel_backward(
     bool use_active, cudaStream_t stream
 );
 
+extern "C" void launch_lowrank_christoffel_forward(
+    const float* v, const float* U, const float* W, float* gamma,
+    int batch, int dim, int rank, cudaStream_t stream
+);
+
+extern "C" void launch_lowrank_christoffel_backward(
+    const float* grad_gamma, const float* v, const float* U, const float* W,
+    float* grad_v, float* grad_U, float* grad_W,
+    int batch, int dim, int rank, cudaStream_t stream
+);
+
+extern "C" void launch_reactive_christoffel_forward(
+    const float* v, const float* U, const float* W, float* gamma,
+    const float* x, const float* V_w,
+    int batch, int dim, int rank,
+    float plasticity, float sing_thresh, float sing_strength,
+    cudaStream_t stream
+);
+
 extern "C" void launch_leapfrog_fused(
     const float* x, const float* v, const float* f,
     const float* U, const float* W,
@@ -37,6 +56,17 @@ extern "C" void launch_leapfrog_fused(
     float dt, float dt_scale,
     int batch, int dim, int rank,
     int steps,
+    cudaStream_t stream
+);
+
+extern "C" void launch_leapfrog_backward(
+    const float* grad_x_new, const float* grad_v_new,
+    const float* x, const float* v, const float* f,
+    const float* U, const float* W,
+    float* grad_x, float* grad_v, float* grad_f,
+    float* grad_U, float* grad_W,
+    int batch, int dim, int rank,
+    float dt, float dt_scale, int steps,
     cudaStream_t stream
 );
 
@@ -132,19 +162,44 @@ extern "C" void launch_dormand_prince_fused(
 extern "C" void launch_parallel_scan_fused(
     const float* a, const float* x, float* y,
     int batch, int seq_len, int dim,
+    float plasticity,
     cudaStream_t stream
 );
 
 extern "C" void launch_recurrent_manifold_fused(
     float* x_state, float* v_state,
     const float* forces, const float* U_stack, const float* W_stack,
-    float* x_out_seq,
+    float* x_out_seq, float* reg_loss,
     int batch, int seq_len, int dim, int rank, int num_layers,
+    float dt, float dt_scale, int num_heads,
+    float plasticity, float sing_thresh, float sing_strength,
+    cudaStream_t stream
+);
+
+extern "C" void launch_recurrent_manifold_backward(
+    const float* grad_x_seq, const float* grad_x_final, const float* grad_v_final,
+    const float* x_final, const float* v_final,
+    const float* forces, const float* U_stack, const float* W_stack,
+    float* grad_x_init, float* grad_v_init, float* grad_forces,
+    float* grad_U, float* grad_W,
+    int batch_total, int seq_len, int dim, int rank, int num_layers, int num_heads,
     float dt, float dt_scale,
+    float plasticity, float sing_thresh, float sing_strength,
+    cudaStream_t stream
+);
+
+extern "C" void launch_manifold_step_fused(
+    const float* x_in, const float* v_in, const float* force,
+    const float* U, const float* W,
+    float* x_out, float* v_out, float* christoffel_out,
+    int batch, int dim, int rank,
+    float dt, float dt_scale,
+    float plasticity, float sing_thresh, float sing_strength,
     cudaStream_t stream
 );
 
 // Wrappers
+
 torch::Tensor christoffel_fused_cuda(torch::Tensor v, torch::Tensor U, torch::Tensor W, torch::Tensor x, torch::Tensor V_w, float plasticity, float sing_thresh, float sing_strength) {
     auto gamma = torch::empty_like(v);
     const float* x_ptr = (x.numel() > 0) ? x.data_ptr<float>() : nullptr;
@@ -167,6 +222,57 @@ std::vector<torch::Tensor> christoffel_backward_cuda(torch::Tensor grad_gamma, t
     if (plasticity != 0.0f) use_active = true;
     launch_christoffel_backward(grad_gamma.data_ptr<float>(), v.data_ptr<float>(), U.data_ptr<float>(), W.data_ptr<float>(), x_ptr, V_ptr, grad_v.data_ptr<float>(), grad_U.data_ptr<float>(), grad_W.data_ptr<float>(), gx_ptr, gV_ptr, v.size(0), v.size(1), U.size(1), plasticity, sing_thresh, sing_strength, use_active, at::cuda::getCurrentCUDAStream());
     return {grad_v, grad_U, grad_W, grad_x, grad_V_w};
+}
+
+torch::Tensor lowrank_christoffel_forward_cuda(torch::Tensor v, torch::Tensor U, torch::Tensor W) {
+    auto gamma = torch::empty_like(v);
+    launch_lowrank_christoffel_forward(v.data_ptr<float>(), U.data_ptr<float>(), W.data_ptr<float>(), gamma.data_ptr<float>(), v.size(0), v.size(1), U.size(1), at::cuda::getCurrentCUDAStream());
+    return gamma;
+}
+
+std::vector<torch::Tensor> lowrank_christoffel_backward_cuda(torch::Tensor grad_gamma, torch::Tensor v, torch::Tensor U, torch::Tensor W) {
+    auto grad_v = torch::zeros_like(v);
+    auto grad_U = torch::zeros_like(U);
+    auto grad_W = torch::zeros_like(W);
+    launch_lowrank_christoffel_backward(grad_gamma.data_ptr<float>(), v.data_ptr<float>(), U.data_ptr<float>(), W.data_ptr<float>(), grad_v.data_ptr<float>(), grad_U.data_ptr<float>(), grad_W.data_ptr<float>(), v.size(0), v.size(1), U.size(1), at::cuda::getCurrentCUDAStream());
+    return {grad_v, grad_U, grad_W};
+}
+
+torch::Tensor reactive_christoffel_forward_cuda(torch::Tensor v, torch::Tensor U, torch::Tensor W, torch::Tensor x, torch::Tensor V_w, float plasticity, float sing_thresh, float sing_strength) {
+    auto gamma = torch::empty_like(v);
+    const float* x_ptr = (x.numel() > 0) ? x.data_ptr<float>() : nullptr;
+    const float* V_ptr = (V_w.numel() > 0) ? V_w.data_ptr<float>() : nullptr;
+    launch_reactive_christoffel_forward(v.data_ptr<float>(), U.data_ptr<float>(), W.data_ptr<float>(), gamma.data_ptr<float>(), x_ptr, V_ptr, v.size(0), v.size(1), U.size(1), plasticity, sing_thresh, sing_strength, at::cuda::getCurrentCUDAStream());
+    return gamma;
+}
+
+std::vector<torch::Tensor> leapfrog_backward_cuda(
+    torch::Tensor grad_x_new, torch::Tensor grad_v_new,
+    torch::Tensor x, torch::Tensor v, torch::Tensor f,
+    torch::Tensor U, torch::Tensor W,
+    float dt, float dt_scale, int steps
+) {
+    auto grad_x = torch::zeros_like(x);
+    auto grad_v = torch::zeros_like(v);
+    auto grad_f = torch::zeros_like(f);
+    auto grad_U = torch::zeros_like(U);
+    auto grad_W = torch::zeros_like(W);
+    
+    const float* f_ptr = (f.numel() > 0) ? f.data_ptr<float>() : nullptr;
+    float* gf_ptr = (f.numel() > 0) ? grad_f.data_ptr<float>() : nullptr;
+    
+    launch_leapfrog_backward(
+        grad_x_new.data_ptr<float>(), grad_v_new.data_ptr<float>(),
+        x.data_ptr<float>(), v.data_ptr<float>(), f_ptr,
+        U.data_ptr<float>(), W.data_ptr<float>(),
+        grad_x.data_ptr<float>(), grad_v.data_ptr<float>(), gf_ptr,
+        grad_U.data_ptr<float>(), grad_W.data_ptr<float>(),
+        x.size(0), x.size(1), U.size(1),
+        dt, dt_scale, steps,
+        at::cuda::getCurrentCUDAStream()
+    );
+    
+    return {grad_x, grad_v, grad_f, grad_U, grad_W};
 }
 
 std::vector<torch::Tensor> euler_fused_cuda(torch::Tensor x, torch::Tensor v, torch::Tensor f, torch::Tensor U, torch::Tensor W, float dt, float dt_scale, int steps) {
@@ -229,39 +335,119 @@ std::vector<torch::Tensor> dormand_prince_fused_cuda(torch::Tensor x, torch::Ten
     return {x_new, v_new};
 }
 
-torch::Tensor parallel_scan_fused_cuda(torch::Tensor a, torch::Tensor x) {
+torch::Tensor parallel_scan_fused_cuda(torch::Tensor a, torch::Tensor x, float plasticity) {
     auto y = torch::empty_like(x);
-    launch_parallel_scan_fused(a.data_ptr<float>(), x.data_ptr<float>(), y.data_ptr<float>(), a.size(0), a.size(1), a.size(2), at::cuda::getCurrentCUDAStream());
+    launch_parallel_scan_fused(a.data_ptr<float>(), x.data_ptr<float>(), y.data_ptr<float>(), a.size(0), a.size(1), a.size(2), plasticity, at::cuda::getCurrentCUDAStream());
     return y;
 }
 
 std::vector<torch::Tensor> recurrent_manifold_fused_cuda(
     torch::Tensor x_state, torch::Tensor v_state,
     torch::Tensor forces, torch::Tensor U_stack, torch::Tensor W_stack,
-    float dt, float dt_scale
+    float dt, float dt_scale, int num_heads,
+    float plasticity, float sing_thresh, float sing_strength
 ) {
     int batch = x_state.size(0);
     int dim = x_state.size(1);
     int seq_len = forces.size(1);
     int rank = U_stack.size(2);
-    int num_layers = U_stack.size(0);
+    int num_layers = U_stack.size(0) / num_heads;  // Account for heads in stack
     
     auto x_out_seq = torch::empty({batch, seq_len, dim}, x_state.options());
+    auto reg_loss = torch::zeros({batch}, x_state.options());
     
     launch_recurrent_manifold_fused(
         x_state.data_ptr<float>(), v_state.data_ptr<float>(),
         forces.data_ptr<float>(), U_stack.data_ptr<float>(), W_stack.data_ptr<float>(),
-        x_out_seq.data_ptr<float>(),
-        batch, seq_len, dim, rank, num_layers, dt, dt_scale,
+        x_out_seq.data_ptr<float>(), reg_loss.data_ptr<float>(),
+        batch, seq_len, dim, rank, num_layers,
+        dt, dt_scale, num_heads,
+        plasticity, sing_thresh, sing_strength,
         at::cuda::getCurrentCUDAStream()
     );
     
-    return {x_state, v_state, x_out_seq};
+    return {x_state, v_state, x_out_seq, reg_loss};
+    return {x_state, v_state, x_out_seq, reg_loss};
+}
+
+std::vector<torch::Tensor> recurrent_manifold_backward_cuda(
+    torch::Tensor grad_x_seq, torch::Tensor grad_x_final, torch::Tensor grad_v_final,
+    torch::Tensor x_final, torch::Tensor v_final,
+    torch::Tensor forces, torch::Tensor U_stack, torch::Tensor W_stack,
+    float dt, float dt_scale, int num_heads,
+    float plasticity, float sing_thresh, float sing_strength
+) {
+    int batch_total = x_final.size(0);
+    int dim = x_final.size(1);
+    int seq_len = forces.size(1);
+    int rank = U_stack.size(2);
+    int num_layers = U_stack.size(0) / num_heads;
+
+    auto grad_x_init = torch::zeros_like(x_final);
+    auto grad_v_init = torch::zeros_like(v_final);
+    auto grad_forces = torch::zeros_like(forces);
+    auto grad_U = torch::zeros_like(U_stack);
+    auto grad_W = torch::zeros_like(W_stack);
+
+    const float* gx_seq_ptr = (grad_x_seq.numel() > 0) ? grad_x_seq.data_ptr<float>() : nullptr;
+    const float* gx_final_ptr = (grad_x_final.numel() > 0) ? grad_x_final.data_ptr<float>() : nullptr;
+    const float* gv_final_ptr = (grad_v_final.numel() > 0) ? grad_v_final.data_ptr<float>() : nullptr;
+
+    launch_recurrent_manifold_backward(
+        gx_seq_ptr, gx_final_ptr, gv_final_ptr,
+        x_final.data_ptr<float>(), v_final.data_ptr<float>(),
+        forces.data_ptr<float>(), U_stack.data_ptr<float>(), W_stack.data_ptr<float>(),
+        grad_x_init.data_ptr<float>(), grad_v_init.data_ptr<float>(), grad_forces.data_ptr<float>(),
+        grad_U.data_ptr<float>(), grad_W.data_ptr<float>(),
+        batch_total, seq_len, dim, rank, num_layers, num_heads,
+        dt, dt_scale,
+        plasticity, sing_thresh, sing_strength,
+        at::cuda::getCurrentCUDAStream()
+    );
+
+    return {grad_x_init, grad_v_init, grad_forces, grad_U, grad_W};
+}
+
+std::vector<torch::Tensor> manifold_step_fused_cuda(
+    torch::Tensor x_in, torch::Tensor v_in, torch::Tensor force,
+    torch::Tensor U, torch::Tensor W,
+    float dt, float dt_scale,
+    float plasticity, float sing_thresh, float sing_strength,
+    bool return_christoffel
+) {
+    int batch = x_in.size(0);
+    int dim = x_in.size(1);
+    int rank = U.size(1);
+    
+    auto x_out = torch::empty_like(x_in);
+    auto v_out = torch::empty_like(v_in);
+    torch::Tensor christoffel_out = torch::empty(0, x_in.options());
+    
+    float* c_ptr = nullptr;
+    if (return_christoffel) {
+        christoffel_out = torch::empty_like(x_in);
+        c_ptr = christoffel_out.data_ptr<float>();
+    }
+    
+    launch_manifold_step_fused(
+        x_in.data_ptr<float>(), v_in.data_ptr<float>(), force.data_ptr<float>(),
+        U.data_ptr<float>(), W.data_ptr<float>(),
+        x_out.data_ptr<float>(), v_out.data_ptr<float>(), c_ptr,
+        batch, dim, rank, dt, dt_scale,
+        plasticity, sing_thresh, sing_strength,
+        at::cuda::getCurrentCUDAStream()
+    );
+    
+    return {x_out, v_out, christoffel_out};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("christoffel_fused", &christoffel_fused_cuda);
     m.def("christoffel_backward", &christoffel_backward_cuda);
+    m.def("lowrank_christoffel_forward", &lowrank_christoffel_forward_cuda);
+    m.def("lowrank_christoffel_backward", &lowrank_christoffel_backward_cuda);
+    m.def("reactive_christoffel_forward", &reactive_christoffel_forward_cuda);
+    m.def("leapfrog_backward", &leapfrog_backward_cuda);
     m.def("euler_fused", &euler_fused_cuda);
     m.def("leapfrog_fused", &leapfrog_fused_cuda);
     m.def("yoshida_fused", &yoshida_fused_cuda);
@@ -273,4 +459,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("dormand_prince_fused", &dormand_prince_fused_cuda);
     m.def("parallel_scan_fused", &parallel_scan_fused_cuda);
     m.def("recurrent_manifold_fused", &recurrent_manifold_fused_cuda);
+    m.def("recurrent_manifold_backward", &recurrent_manifold_backward_cuda);
+    m.def("manifold_step_fused", &manifold_step_fused_cuda);
 }

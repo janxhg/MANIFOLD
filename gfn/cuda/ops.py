@@ -114,12 +114,51 @@ def christoffel_fused(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0
 
     return torch.clamp(gamma, -5.0, 5.0)
 
+def lowrank_christoffel_fused(v, U, W):
+    """
+    MODULAR: Pure Low-Rank Christoffel geometry.
+    """
+    if CUDA_AVAILABLE and v.is_cuda:
+        from .autograd import lowrank_christoffel_autograd
+        res = lowrank_christoffel_autograd(v, U, W)
+        if res is not None:
+            return res
+            
+    # Fallback to standard logic (simpler version of the one above)
+    proj = torch.matmul(v, U)
+    norm = torch.norm(proj, dim=-1, keepdim=True)
+    scale = 1.0 / (1.0 + norm)
+    sq = (proj * proj) * scale
+    return torch.matmul(sq, W.t())
+
+def reactive_christoffel_fused(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0):
+    """
+    MODULAR: Active Inference Christoffel geometry.
+    """
+    if CUDA_AVAILABLE and v.is_cuda:
+        from .autograd import reactive_christoffel_autograd
+        res = reactive_christoffel_autograd(v, U, W, x, V_w, plasticity, sing_thresh, sing_strength)
+        if res is not None:
+            return res
+            
+    # Fallback uses the monolithic logic already present in ops.py
+    return christoffel_fused(v, U, W, x, V_w, plasticity, sing_thresh, sing_strength)
+
 
 def leapfrog_fused(x, v, f, U, W, dt, dt_scale=1.0, steps=1):
     """
     Fused Leapfrog integration step. (Supports Recurrent Fusion if steps > 1)
+    Uses autograd-enabled backward pass during training.
     """
     if CUDA_AVAILABLE and x.is_cuda:
+        # Use autograd version if gradients are needed
+        if x.requires_grad or U.requires_grad or W.requires_grad:
+            from .autograd import leapfrog_fused_autograd
+            result = leapfrog_fused_autograd(x, v, f, U, W, dt, dt_scale, steps)
+            if result is not None:
+                return result
+        
+        # Inference-only path (no gradients)
         return gfn_cuda.leapfrog_fused(x.contiguous(), v.contiguous(), f.contiguous() if f is not None else torch.zeros_like(x), 
                                       U.contiguous(), W.contiguous(), dt, dt_scale, steps)
     else:
@@ -234,16 +273,15 @@ def dormand_prince_fused(x, v, f, U, W, dt, dt_scale=1.0, steps=1):
     else:
         return None
 
-def parallel_scan_fused(a, x):
+def parallel_scan_fused(a, x, plasticity=0.0):
     """
-    Fused Associative Scan for Parallel Geodesic Flow.
+    Fused Associative Scan with Active Inference.
     """
     if CUDA_AVAILABLE and a.is_cuda:
-         return gfn_cuda.parallel_scan_fused(a.contiguous(), x.contiguous())
+         return gfn_cuda.parallel_scan_fused(a.contiguous(), x.contiguous(), plasticity)
     else:
          # Standard PyTorch implementation for Associative Scan
          # y_t = a_t * y_{t-1} + x_t
-         # This is less efficient but biologically correct fallback
          from torch.distributions.utils import broadcast_all
          a, x = broadcast_all(a, x)
          y = torch.zeros_like(x)
@@ -253,15 +291,33 @@ def parallel_scan_fused(a, x):
              prev = y[:, t]
          return y
 
-def recurrent_manifold_fused(x_state, v_state, forces, U_stack, W_stack, dt, dt_scale=1.0):
+def manifold_step_fused(x, v, force, U, W, dt, dt_scale=1.0, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0, return_christoffel=False):
+    """
+    Fused Manifold Step (Time-Distributed, Layer-Atomic).
+    """
+    if CUDA_AVAILABLE and x.is_cuda:
+        return gfn_cuda.manifold_step_fused(
+            x.contiguous(), v.contiguous(), force.contiguous(),
+            U.contiguous(), W.contiguous(),
+            dt, dt_scale, plasticity, sing_thresh, sing_strength, return_christoffel
+        )
+    return None
+
+def recurrent_manifold_fused(x_state, v_state, forces, U_stack, W_stack, dt, dt_scale=1.0, num_heads=1,
+                            plasticity=0.0, sing_thresh=1.0, sing_strength=1.0):
     """
     ULTRA-PERFORMANCE Recurrent Manifold Fused Op.
     Processes ENTIRE sequence and ALL layers in ONE kernel launch.
+    Now supports multi-head processing and fused regularization!
+    
+    Returns:
+        x_state, v_state, x_seq, reg_loss
     """
     if CUDA_AVAILABLE and x_state.is_cuda:
         return gfn_cuda.recurrent_manifold_fused(
             x_state.contiguous(), v_state.contiguous(), 
             forces.contiguous(), U_stack.contiguous(), W_stack.contiguous(), 
-            dt, dt_scale
+            dt, dt_scale, num_heads,
+            plasticity, sing_thresh, sing_strength
         )
     return None

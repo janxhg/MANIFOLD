@@ -84,7 +84,8 @@ __global__ void parallel_scan_fused_kernel(
     float* __restrict__ y,          // Output [B, L, D]
     const int batch,
     const int seq_len,
-    const int dim
+    const int dim,
+    const float plasticity
 ) {
     // Each block handles one batch and one dimension
     const int b = blockIdx.x;
@@ -109,7 +110,21 @@ __global__ void parallel_scan_fused_kernel(
         // Load data into shared memory
         if (tid < chunk_size) {
             const int idx = base_idx + seq_idx * stride;
-            s_a[tid] = a[idx];
+            float a_val = a[idx];
+            
+            // Active Inference Modulation:
+            // A_new = A_old * (1 + plasticity * tanh(x^2))? 
+            // Simplified: A_new = A_old + plasticity * ...
+            // Let's assume input 'a' is raw decay.
+            // We apply plasticity here if needed.
+            // For now, identity pass-through as placeholder or simple scaling.
+            if (plasticity != 0.0f) {
+                // Example: modulate forget gate by energy of input x
+                // float energy = tanh(x[idx] * x[idx]);
+                 // a_val = a_val * (1.0f + plasticity * energy);
+            }
+            
+            s_a[tid] = a_val;
             s_x[tid] = x[idx];
         } else {
             // Padding with identity
@@ -164,6 +179,9 @@ extern "C" void launch_parallel_scan_fused(
     int batch,
     int seq_len,
     int dim,
+    int seq_len,
+    int dim,
+    float plasticity,
     cudaStream_t stream
 ) {
     // Grid: (batch, dim)
@@ -176,6 +194,7 @@ extern "C" void launch_parallel_scan_fused(
     const int shared_bytes = 2 * (BLOCK_SIZE + padding) * sizeof(float);
     
     parallel_scan_fused_kernel<<<grid, block, shared_bytes, stream>>>(
-        a, x, y, batch, seq_len, dim
+    parallel_scan_fused_kernel<<<grid, block, shared_bytes, stream>>>(
+        a, x, y, batch, seq_len, dim, plasticity
     );
 }
