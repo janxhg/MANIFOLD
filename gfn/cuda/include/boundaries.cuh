@@ -9,7 +9,9 @@
 #define TOPOLOGY_TORUS 1
 
 #define TWO_PI 6.28318530718f
+#ifndef PI
 #define PI 3.14159265359f
+#endif
 
 /**
  * Apply Boundary Condition to Position vector component x.

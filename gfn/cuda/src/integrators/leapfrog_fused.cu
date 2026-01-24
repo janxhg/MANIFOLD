@@ -16,7 +16,8 @@ __global__ void leapfrog_fused_kernel(
     const int batch,
     const int dim,
     const int rank,
-    const int steps
+    const int steps,
+    int topology
 ) {
     extern __shared__ float s_mem_f[];
     float* s_x = s_mem_f;
@@ -43,7 +44,7 @@ __global__ void leapfrog_fused_kernel(
 
     for (int s = 0; s < steps; s++) {
         // --- Kick (Half) ---
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, topology, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -58,7 +59,7 @@ __global__ void leapfrog_fused_kernel(
         __syncthreads();
 
         // --- Kick (Half) ---
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, topology, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -79,11 +80,11 @@ extern "C" void launch_leapfrog_fused(
     float* x_new, float* v_new,
     float dt, float dt_scale,
     int batch, int dim, int rank,
-    int steps,
+    int steps, int topology,
     cudaStream_t stream
 ) {
     int shared = (3 * dim + rank + 16) * sizeof(float) + 2 * sizeof(double);
     leapfrog_fused_kernel<<<batch, BLOCK_SIZE, shared, stream>>>(
-        x, v, f, U, W, x_new, v_new, dt, dt_scale, batch, dim, rank, steps
+        x, v, f, U, W, x_new, v_new, dt, dt_scale, batch, dim, rank, steps, topology
     );
 }

@@ -44,6 +44,7 @@ __global__ void lowrank_christoffel_forward_kernel(
         nullptr, nullptr, // x and V_w handled separately
         dim, rank, 
         0.0f, 1.0f, 1.0f, false, 
+        0, // topology=0 (Euclidean)
         nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
         s_h, &s_E, &s_P, &s_M
     );

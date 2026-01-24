@@ -3,15 +3,6 @@
 
 #define BLOCK_SIZE 256
 
-/**
- * Reactive Christoffel Modular Kernel (v1.0)
- * -----------------------------------------
- * Implements Active Inference geometry:
- * 1. Base LowRank Geometry
- * 2. Reactive Plasticity (tanh(energy))
- * 3. Logical Singularities (sigmoid(V·x))
- */
-
 __global__ void reactive_christoffel_forward_kernel(
     const float* __restrict__ v,
     const float* __restrict__ U,
@@ -24,7 +15,8 @@ __global__ void reactive_christoffel_forward_kernel(
     const int rank,
     float plasticity,
     float sing_thresh,
-    float sing_strength
+    float sing_strength,
+    int topology
 ) {
     __shared__ float s_h[MAX_RANK];
     __shared__ double s_E;
@@ -34,21 +26,30 @@ __global__ void reactive_christoffel_forward_kernel(
     const int b = blockIdx.x;
     if (b >= batch) return;
 
-    // Full Active Inference geometry via christoffel_device
     christoffel_device(
         v + b * dim, U, W, gamma + b * dim, 
         (x != nullptr) ? (x + b * dim) : nullptr, V_w, 
         dim, rank, 
-        plasticity, sing_thresh, sing_strength, true, // use_active=true
-        nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
+        plasticity, sing_thresh, sing_strength, true, 
+        topology,
+        nullptr, nullptr, nullptr, nullptr, 
         s_h, &s_E, &s_P, &s_M
     );
 }
 
-/**
- * Backward Kernel for Reactive Christoffel
- * (Reuses much of the logic from the old monolithic version but cleaned up)
- */
+extern "C" void launch_reactive_christoffel_forward(
+    const float* v, const float* U, const float* W, float* gamma,
+    const float* x, const float* V_w,
+    int batch, int dim, int rank,
+    float plasticity, float sing_thresh, float sing_strength,
+    int topology,
+    cudaStream_t stream
+) {
+    reactive_christoffel_forward_kernel<<<batch, BLOCK_SIZE, 0, stream>>>(
+        v, U, W, gamma, x, V_w, batch, dim, rank, plasticity, sing_thresh, sing_strength, topology
+    );
+}
+
 __global__ void reactive_christoffel_backward_kernel(
     const float* __restrict__ grad_gamma,
     const float* __restrict__ v,
@@ -66,152 +67,12 @@ __global__ void reactive_christoffel_backward_kernel(
     const int rank,
     float plasticity,
     float sing_thresh,
-    float sing_strength
+    float sing_strength,
+    int topology
 ) {
-    extern __shared__ float s_mem[];
-    float* s_h = s_mem;  // [rank]
-    
-    double* s_double = (double*)(s_mem + rank + (rank % 2));
-    double* s_grad_h = s_double;           // [rank]
-    double* s_E = s_grad_h + rank;
-    double* s_P = s_E + 1;
-    double* s_M = s_P + 1;
-    double* s_dL_dM = s_M + 1;
-
-    const int b = blockIdx.x;
-    const int tid = threadIdx.x;
-    if (b >= batch) return;
-
-    const float* v_b = v + b * dim;
-    const float* gg_b = grad_gamma + b * dim;
-    const float* x_b = (x) ? (x + b * dim) : nullptr;
-    float* gv_b = grad_v + b * dim;
-
-    // 1. Reset
-    if (tid == 0) {
-        *s_E = 0.0;
-        *s_P = 0.0;
-        *s_M = 0.0;
-        *s_dL_dM = 0.0;
-    }
-    for (int r = tid; r < rank; r += blockDim.x) {
-        s_h[r] = 0.0f;
-        s_grad_h[r] = 0.0;
-    }
-    __syncthreads();
-
-    // 2. Forward Recompute: h, Energy, Potential
-    for (int r = 0; r < rank; ++r) {
-        float local_h = 0.0f;
-        for (int i = tid; i < dim; i += blockDim.x) local_h += v_b[i] * U[i * rank + r];
-        local_h = warpReduceSum(local_h);
-        if ((tid & 31) == 0) atomicAdd(&s_h[r], local_h);
-    }
-    
-    double local_E = 0.0, local_P = 0.0;
-    for (int i = tid; i < dim; i += blockDim.x) {
-        if (plasticity != 0.0f) local_E += (double)v_b[i] * (double)v_b[i];
-        if (x_b != nullptr && V_w != nullptr) local_P += (double)x_b[i] * (double)V_w[i]; 
-    }
-    if (plasticity != 0.0f) atomicAdd(s_E, local_E);
-    if (x_b != nullptr && V_w != nullptr) atomicAdd(s_P, local_P);
-    __syncthreads();
-
-    // 3. Multipliers
-    double M_plast = 1.0, M_sing = 1.0;
-    if (plasticity != 0.0f) M_plast = 1.0 + (double)plasticity * tanh(*s_E / (double)dim);
-    if (x_b != nullptr && V_w != nullptr) {
-        if (1.0 / (1.0 + exp(-*s_P)) > (double)sing_thresh) M_sing = (double)sing_strength;
-    }
-    double M = M_plast * M_sing;
-
-    // 4. Norm and S
-    double local_nsq = 0.0;
-    for (int r = tid; r < rank; r += blockDim.x) local_nsq += (double)s_h[r] * (double)s_h[r];
-    atomicAdd(s_M, local_nsq);
-    __syncthreads();
-    
-    double norm_h = sqrt(*s_M);
-    double S = 1.0 / (1.0 + norm_h);
-
-    // 5. Backward Pass
-    double local_dL_dM = 0.0;
-    for (int j = tid; j < dim; j += blockDim.x) {
-        double gamma_static = 0.0;
-        for (int r = 0; r < rank; r++) gamma_static += (double)W[j * rank + r] * (double)s_h[r] * (double)s_h[r];
-        gamma_static *= S;
-        
-        double gg = (double)gg_b[j];
-        if (gamma_static * M <= -5.0 || gamma_static * M >= 5.0) gg = 0.0;
-        
-        local_dL_dM += gg * gamma_static;
-        double gg_M = gg * M;
-        for (int r = 0; r < rank; r++) {
-            double hr = (double)s_h[r];
-            atomicAdd(&grad_W[j * rank + r], (float)(gg_M * hr * hr * S));
-            atomicAdd(&s_grad_h[r], gg_M * (double)W[j * rank + r]);
-        }
-    }
-    atomicAdd(s_dL_dM, local_dL_dM);
-    __syncthreads();
-
-    // S-modulation (simplified from monolithic)
-    if (tid == 0) *s_M = 0.0;
-    __syncthreads();
-    double local_C = 0.0;
-    for (int r = tid; r < rank; r += blockDim.x) local_C += s_grad_h[r] * (double)s_h[r] * (double)s_h[r] * S;
-    atomicAdd(s_M, local_C);
-    __syncthreads();
-    
-    double C_val = *s_M;
-    for (int r = tid; r < rank; r += blockDim.x) {
-        double hr = (double)s_h[r];
-        s_grad_h[r] = S * hr * (2.0 * s_grad_h[r] - C_val / (norm_h + 1e-12));
-    }
-    __syncthreads();
-
-    // Final gradients for v, U, x, V_w
-    double plast_grad = 0.0;
-    if (plasticity != 0.0f) {
-        double t = tanh(*s_E / (double)dim);
-        plast_grad = *s_dL_dM * M_sing * (double)plasticity * (1.0 - t*t) * (2.0 / (double)dim);
-    }
-
-    for (int k = tid; k < dim; k += blockDim.x) {
-        double vk = (double)v_b[k];
-        double dv = plast_grad * vk;
-        for (int r = 0; r < rank; r++) {
-            double dhr = s_grad_h[r];
-            dv += dhr * (double)U[k * rank + r];
-            atomicAdd(&grad_U[k * rank + r], (float)(dhr * vk));
-        }
-        gv_b[k] = (float)dv;
-        
-        // Singularity gradients (if active)
-        if (x_b != nullptr && V_w != nullptr) {
-            double pot = 1.0 / (1.0 + exp(-*s_P));
-            if (pot > (double)sing_thresh) {
-                // Approximate derivative for threshold-based singularity
-                // In practice we use sigmoid derivative for the potential itself
-                double dpot = pot * (1.0 - pot);
-                double dL_dpot = *s_dL_dM * M_plast * (double)sing_strength; // Rough estimate
-                atomicAdd(&grad_x[b * dim + k], (float)(dL_dpot * dpot * V_w[k]));
-                atomicAdd(&grad_V_w[k], (float)(dL_dpot * dpot * x_b[k]));
-            }
-        }
-    }
-}
-
-extern "C" void launch_reactive_christoffel_forward(
-    const float* v, const float* U, const float* W, float* gamma,
-    const float* x, const float* V_w,
-    int batch, int dim, int rank,
-    float plasticity, float sing_thresh, float sing_strength,
-    cudaStream_t stream
-) {
-    reactive_christoffel_forward_kernel<<<batch, BLOCK_SIZE, 0, stream>>>(
-        v, U, W, gamma, x, V_w, batch, dim, rank, plasticity, sing_thresh, sing_strength
-    );
+    // For simplicity, we reuse the robust logic from christoffel_backward_kernel
+    // in christoffel_fused.cu which already handles everything.
+    // In a professional production environment, these would be aliased.
 }
 
 extern "C" void launch_reactive_christoffel_backward(
@@ -221,12 +82,22 @@ extern "C" void launch_reactive_christoffel_backward(
     float* grad_x, float* grad_V_w,
     int batch, int dim, int rank,
     float plasticity, float sing_thresh, float sing_strength,
+    int topology,
     cudaStream_t stream
 ) {
-    int shared_floats = rank + (rank % 2);
-    int shared = shared_floats * sizeof(float) + (rank + 6) * sizeof(double);
-    reactive_christoffel_backward_kernel<<<batch, BLOCK_SIZE, shared, stream>>>(
+    // Forward to launch_christoffel_backward but with use_active=true
+    extern void launch_christoffel_backward(
+        const float*, const float*, const float*, const float*, 
+        const float*, const float*,
+        float*, float*, float*,
+        float*, float*,
+        int, int, int,
+        float, float, float,
+        bool, int, cudaStream_t
+    );
+    
+    launch_christoffel_backward(
         grad_gamma, v, U, W, x, V_w, grad_v, grad_U, grad_W, grad_x, grad_V_w,
-        batch, dim, rank, plasticity, sing_thresh, sing_strength
+        batch, dim, rank, plasticity, sing_thresh, sing_strength, true, topology, stream
     );
 }

@@ -200,7 +200,7 @@ class Manifold(nn.Module):
             context = None
             
             # Trajectory Fusion Path: Fuses Seq_Len × Depth × Heads into ONE kernel launch.
-            # LEVEL 28: Disable fusion for Torus to support Periodic Mixing logic.
+            # LEVEL 28: Disable fusion for Torus to ensure stable unrolling of periodic features.
             topo_cfg = self.physics_config.get('topology', {})
             topology_type = topo_cfg.get('type', 'euclidean')
             is_torus = (topology_type == 'torus')

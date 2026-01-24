@@ -222,7 +222,7 @@ def run_superiority_benchmark():
     gpt = MicroGPT(vocab_size=2, dim=dim, depth=6, heads=1, max_len=100000).to(device)
     
     # 2. Training Phase
-    h_m = train_model(manifold, max_steps=10000, device=device)
+    h_m = train_model(manifold, max_steps=1000, device=device)
     h_g = train_model(gpt, max_steps=1200, device=device)
     
     # 3. Scaling Phase
