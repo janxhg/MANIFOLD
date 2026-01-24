@@ -55,6 +55,7 @@ __global__ void leapfrog_fused_kernel(
         // --- Drift (Full) ---
         for (int i = tid; i < dim; i += blockDim.x) {
             s_x[i] += eff_dt * s_v[i];
+            s_x[i] = apply_boundary(s_x[i], topology); // CRITICAL: Wrap on Manifold
         }
         __syncthreads();
 

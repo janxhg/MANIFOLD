@@ -10,39 +10,50 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def hamiltonian_loss(velocities: list, lambda_h: float = 0.01) -> torch.Tensor:
+def hamiltonian_loss(velocities: list, states: list = None, metric_fn=None, lambda_h: float = 0.01, forces: list = None) -> torch.Tensor:
     """
-    Hamiltonian Energy Conservation Loss.
+    Riemannian Hamiltonian Energy Conservation Loss.
     
-    Penalizes the model if kinetic energy (||v||²) changes violently between 
-    timesteps. This enforces smooth geodesic flow and prevents gradient explosion.
-    
-    Formula:
-        L_H = λ * Σ_t |E_t - E_{t-1}|
-        where E_t = ||v_t||²
-    
-    Args:
-        velocities: List of velocity tensors [v_0, v_1, ..., v_T], each [batch, dim]
-        lambda_h: Regularization strength (default: 0.01)
-        
-    Returns:
-        Scalar loss tensor
+    If 'metric_fn' is provided, computes Energy = 0.5 * v^T g(x) v.
+    Otherwise fallbacks to Euclidean Energy = 0.5 * ||v||^2.
     """
     if len(velocities) < 2:
         return torch.tensor(0.0, device=velocities[0].device)
     
-    # Compute kinetic energy at each timestep: E = ||v||²
-    energies = [v.pow(2).sum(dim=-1) for v in velocities]  # List of [batch]
+    energies = []
+    for i in range(len(velocities)):
+        v = velocities[i]
+        if metric_fn is not None and states is not None:
+             x = states[i]
+             # E = 0.5 * sum(g_ii * v_i^2) for diagonal metrics
+             g = metric_fn(x) 
+             e = 0.5 * torch.sum(g * v.pow(2), dim=-1)
+        else:
+             e = 0.5 * v.pow(2).sum(dim=-1)
+        energies.append(e)
+        
+    diffs = []
+    for i in range(len(energies) - 1):
+        dE = torch.abs(energies[i+1] - energies[i])
+        if forces is not None and i < len(forces):
+            f_norm = forces[i].pow(2).sum(dim=-1)
+            mask = (f_norm < 1e-4).float()
+            dE = dE * mask
+        diffs.append(dE)
+        
+    return lambda_h * torch.stack(diffs).mean()
+
+
+def kinetic_energy_penalty(velocities: list, lambda_k: float = 0.001) -> torch.Tensor:
+    """
+    L2 Regularization on Velocities.
+    Encourages the model to be 'lazy' and move only when necessary.
+    """
+    if not velocities:
+        return torch.tensor(0.0)
     
-    # Compute absolute energy differences
-    energy_diffs = []
-    for e1, e2 in zip(energies[:-1], energies[1:]):
-        energy_diffs.append(torch.abs(e2 - e1))
-    
-    # Mean over time and batch
-    total_diff = torch.stack(energy_diffs).mean()
-    
-    return lambda_h * total_diff
+    all_v = torch.stack(velocities)
+    return lambda_k * all_v.pow(2).mean()
 
 
 def geodesic_regularization(velocities: list, christoffel_outputs: list, lambda_g: float = 0.001) -> torch.Tensor:

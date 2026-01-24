@@ -94,3 +94,19 @@ def measure_peak_memory(model, func_call, *args, **kwargs):
 def get_model_size_mb(model):
     """Legacy wrapper for backward compatibility."""
     return PerformanceStats.get_model_size_mb(model)
+
+class ParityTask:
+    """Parity Check (Modulo 2) for state tracking."""
+    def __init__(self, vocab_size=2, length=20, mod=2):
+        self.vocab_size = vocab_size
+        self.length = length
+        self.mod = mod
+        
+    def generate_batch(self, batch_size, device='cpu'):
+        x = torch.randint(0, self.vocab_size, (batch_size, self.length), device=device)
+        y_int = torch.cumsum(x, dim=1) % self.mod
+        
+        # Scaling for Manifold (Topological) vs GPT (Classification)
+        PI = 3.14159265359
+        y_angle = y_int.float() * PI
+        return x, y_int, y_angle

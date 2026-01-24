@@ -83,26 +83,7 @@ __device__ void head_mixing_backward_device(
     __syncthreads();
 }
 
-__device__ void christoffel_grads_device(
-    const float* s_dG, const float* s_v, const float* s_h, const float* U, const float* W, float* g_U, float* g_W, int dim, int rank, int tid, float* s_tmp
-) {
-    float local_nsq = 0.0f;
-    for (int r = tid; r < rank; r += blockDim.x) local_nsq += s_h[r] * s_h[r];
-    local_nsq = warpReduceSum(local_nsq);
-    if (tid == 0) *s_tmp = 0.0f;
-    __syncthreads();
-    if ((tid & 31) == 0) atomicAdd(s_tmp, local_nsq);
-    __syncthreads();
-    float S = 1.0f / (1.0f + sqrtf(*s_tmp) + 1e-6f);
-    for (int i = tid; i < dim * rank; i += blockDim.x) atomicAdd(&g_W[i], s_dG[i/rank] * s_h[i%rank] * s_h[i%rank] * S);
-    __syncthreads();
-    for (int r = tid; r < rank; r += blockDim.x) {
-        float sum_dw = 0.0f;
-        for (int i = 0; i < dim; i++) sum_dw += s_dG[i] * W[i * rank + r];
-        float dL_dh = sum_dw * 2.0f * s_h[r] * S;
-        for (int j = 0; j < dim; j++) atomicAdd(&g_U[j * rank + r], dL_dh * s_v[j]);
-    }
-}
+// Redundant local function removed, now in christoffel_impl.cuh
 
 __device__ void compute_friction_backward_device(
     float* s_dmu, const float* s_x, const float* s_u, const float* W_x, const float* W_v, const float* b, 
@@ -183,7 +164,7 @@ __global__ void recurrent_manifold_backward_kernel(
                 float* g_Wfh = g_Wf ? g_Wf + lh_i*dim_h*wx_s : nullptr, *g_Wih = g_Wi ? g_Wi + lh_i*dim_h*dim_h : nullptr, *g_bfh = g_bf ? g_bf + lh_i*dim_h : nullptr, *g_Uh = g_U + lh_i*dim_h*rank_h, *g_Wh = g_W + lh_i*dim_h*rank_h;
 
                 compute_friction_device(s_muh, s_xh, ft, Wfh, Wih, bfh, dim_h, tid, topology);
-                christoffel_device(s_vh, Uh, Wh, s_gah, s_xh, nullptr, dim_h, rank_h, plasticity, sing_thresh, sing_strength, false, topology, ft, Wfh, Wih, bfh, s_h_s, s_db, s_db+1, (float*)(s_db+2));
+                christoffel_device(s_vh, Uh, Wh, s_gah, s_xh, nullptr, dim_h, rank_h, plasticity, sing_thresh, sing_strength, (topology == 1), topology, ft, Wfh, Wih, bfh, s_h_s, s_db, s_db+1, (float*)(s_db+2));
                 __syncthreads();
                 for (int i = tid; i < dim_h; i += blockDim.x) { s_vph[i] = s_vh[i] * (1.0f + half_dt * s_muh[i]) - half_dt * (ft[i] - s_gah[i]); float gvn = s_gvh[i], den = 1.0f + half_dt * s_muh[i], gvp = gvn / den; s_dmh[i] = -gvp * s_vh[i] * half_dt; s_gah[i] = -gvp * half_dt; if (g_forces) atomicAdd(&g_forces[(b*seq_len+t)*dim+off_h+i], gvp * half_dt); s_gvh[i] = gvp; }
                 __syncthreads();
@@ -191,8 +172,10 @@ __global__ void recurrent_manifold_backward_kernel(
                 compute_friction_backward_device(s_dmh, s_xh, ft, Wfh, Wih, bfh, s_gxh, s_guh, g_Wfh, g_Wih, g_bfh, dim_h, tid, topology);
                 for (int i = tid; i < dim_h; i += blockDim.x) { if (g_forces) atomicAdd(&g_forces[(b*seq_len+t)*dim+off_h+i], s_guh[i]); s_xh[i] = apply_boundary(s_xh[i] - eff_dt * s_vph[i], topology); s_gvh[i] += s_gxh[i] * eff_dt; }
                 __syncthreads();
-                christoffel_grads_device(s_gah, s_vph, s_h_s, Uh, Wh, g_Uh, g_Wh, dim_h, rank_h, tid, s_tmpf);
-                christoffel_v_backward_device(s_gah, Uh, Wh, s_h_s, s_vph, s_gvh, dim_h, rank_h, plasticity, false, topology, ft, Wfh, Wih, bfh, s_xh, g_Wfh, g_Wih, g_bfh, 1.0f, 1.0f, s_t1+off_h);
+                // 🚀 FULL GEOMETRIC BACKWARD: Propagate signals to Pos (s_gxh), Vel (s_gvh), and Weights
+                float S_eff = 1.0f / (1.0f + sqrtf(fmaxf((float)*s_db, 0.0f)) + 1e-6f);
+                float M_eff = *(float*)(s_db+2);
+                christoffel_full_backward_device(s_gah, Uh, Wh, s_h_s, s_vph, s_xh, nullptr, s_gxh, s_gvh, nullptr, g_Uh, g_Wh, dim_h, rank_h, plasticity, sing_thresh, sing_strength, (topology == 1), topology, S_eff, M_eff, s_db+1, s_t1+off_h);
                 for(int i=tid; i<dim_h; i+=blockDim.x) s_vh[i] = s_vph[i];
                 __syncthreads();
             }

@@ -52,11 +52,9 @@ __device__ __forceinline__ float apply_distance(float x1, float x2, int topology
         // No, for gradients we need the shortest path vector.
         
         // Wrap dx to [-PI, PI]
-        // dx = fmodf(dx + PI, TWO_PI) - PI; // Standard formula
-        
-        // Optimized branchless or branching? Branching is fine for now.
-        if (dx > PI) dx -= TWO_PI;
-        else if (dx < -PI) dx += TWO_PI;
+        // Wrap dx to [-PI, PI]
+        dx = fmodf(dx + PI, TWO_PI) - PI; 
+        if (dx < -PI) dx += TWO_PI; // fmodf can return negative range for negative inputs
     }
     return dx;
 }

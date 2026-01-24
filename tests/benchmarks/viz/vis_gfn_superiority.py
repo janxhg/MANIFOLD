@@ -22,9 +22,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import GFN Models & Physics
-from gfn.model import Manifold  # This is the correct class name
+from gfn.model import Manifold
 from gfn.optim import RiemannianAdam
-from gfn.losses import geodesic_regularization
+from gfn.losses import geodesic_regularization, hamiltonian_loss, CircularDistanceLoss
 
 # Import Baselines & Utils
 from tests.benchmarks.baselines import MicroGPT
@@ -52,10 +52,10 @@ class ParityTask:
         x = torch.randint(0, self.vocab_size, (batch_size, self.length), device=device)
         y_int = torch.cumsum(x, dim=1) % self.mod
         
-        # Topological Mapping: 0 -> 0.0, 1 -> PI
+        # Scaling for Manifold (Topological) vs GPT (Classification)
         PI = 3.14159265359
-        y = y_int.float() * PI
-        return x, y
+        y_angle = y_int.float() * PI
+        return x, y_int, y_angle
 
 def train_step_manifold(model, optimizer, scheduler, inputs, targets, device):
     optimizer.zero_grad()
@@ -67,25 +67,40 @@ def train_step_manifold(model, optimizer, scheduler, inputs, targets, device):
     
     if isinstance(output, tuple):
         # output[0] is logits [batch, seq_len, dim] (because Holographic Identity readout)
-        # We take dimension 0 as the "answer" channel.
-        x_pred = output[0][:, :, 0] # [batch, seq_len]
+        x_pred = output[0] # [batch, seq_len, dim]
     else:
-        x_pred = output[:, :, 0]
+        x_pred = output
         
-    y_float = targets.float()
+    y_float = targets.float() # [batch, seq_len]
     
-    # HOLOGRAPHIC MODE: Pred is state x. Target is y (coordinate).
-    # Periodic Loss: 1 - cos(pred - target)
-    loss_val = (1.0 - torch.cos(x_pred - y_float)).mean()
+    # HOLOGRAPHIC MODE: Pred is state x [Batch, Seq, Dim]. Target is y [Batch, Seq].
+    # CRITICAL FIX: Supervise ALL dimensions to prevent unsupervised drift noise
+    y_expanded = y_float.unsqueeze(-1).expand_as(x_pred)
+    
+    criterion = CircularDistanceLoss()
+    loss_val = criterion(x_pred, y_expanded)
     
     loss_phy = 0.0
-    # Retrieve christoffels if available in output tuple (index 3)
-    if isinstance(output, tuple) and len(output) > 3:
-        christoffels = output[3]
+    loss_ham = 0.0
+    # Unpack Model Output (logits, (x,v), christoffels, v_seq, x_seq, all_forces)
+    if isinstance(output, tuple) and len(output) >= 6:
+        christoffels = output[2]
+        v_seq = output[3]
+        x_seq = output[4]
+        all_forces = output[5]
+        
         if christoffels:
             loss_phy = geodesic_regularization(None, christoffels, lambda_g=0.001)
         
-    total_loss = loss_val + loss_phy
+            # Level 15: Riemannian Hamiltonian Conservation (Force-Aware)
+            # CRITICAL FIX: Hamiltonian Loss needs a metric_fn. 
+            # We use the metric from the first head of the first layer if available.
+            def first_head_metric(x):
+                 return model.layers[0].christoffels[0].get_metric(x) if hasattr(model.layers[0].christoffels[0], 'get_metric') else torch.ones_like(x)
+
+            loss_ham = hamiltonian_loss(v_seq, states=x_seq, metric_fn=first_head_metric, lambda_h=0.0, forces=all_forces)
+            
+    total_loss = loss_val + loss_phy + loss_ham
     
     if torch.isnan(total_loss):
         print("NaN detected in loss!")
@@ -99,13 +114,13 @@ def train_step_manifold(model, optimizer, scheduler, inputs, targets, device):
     optimizer.step()
     if scheduler: scheduler.step()
     
-    # Accuracy: Check if distance < PI/2
+    # Accuracy: Check mean distance < 1.0 rad
     with torch.no_grad():
-        diff = torch.abs(x_pred - y_float)
-        # Toroidal wrapping for metric
         PI = 3.14159265359
-        diff = torch.min(diff, 2*PI - diff)
-        acc = (diff < (PI / 2)).float().mean().item()
+        TWO_PI = 2.0 * PI
+        diff = torch.abs(x_pred - y_expanded) % TWO_PI
+        diff = torch.min(diff, TWO_PI - diff)
+        acc = (diff.mean(dim=-1) < 1.0).float().mean().item()
     
     return total_loss.item(), acc
 
@@ -126,28 +141,69 @@ def train_step_gpt(model, optimizer, scheduler, inputs, targets, device):
 def train_model(model, max_steps=1000, device='cuda'):
     is_manifold = isinstance(model, Manifold)
     if is_manifold:
-        # Phase 25: Standard AdamW is sufficient for Flat Torus + Clutch
-        optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    else:
-        optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+        torus_params = []
+        std_params = []
+        for name, p in model.named_parameters():
+            if 'x0' in name or 'v0' in name or 'impulse_scale' in name or 'gate' in name:
+                torus_params.append(p)
+            else:
+                std_params.append(p)
 
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=3e-4, total_steps=max_steps)
+        optimizer = optim.AdamW([
+            {'params': std_params, 'lr': 1e-3, 'weight_decay': 1e-4},
+            {'params': torus_params, 'lr': 1e-2, 'weight_decay': 0}
+        ])
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=2e-3, total_steps=max_steps, pct_start=0.2)
     model.train()
     
     history = {"loss": [], "acc": []}
-    pbar = tqdm(range(max_steps), desc=f"Training {'Manifold' if is_manifold else 'GPT'}")
     
-    for i in pbar:
-        task = ParityTask(length=20)
-        x, y = task.generate_batch(128, device=device)
+    for i in range(max_steps):
+        L = 20
         
-        loss, acc = train_step_manifold(model, optimizer, scheduler, x, y, device) if is_manifold else \
-                    train_step_gpt(model, optimizer, scheduler, x, y, device)
+        task = ParityTask(length=L)
+        x, y_class, y_angle = task.generate_batch(128, device=device)
+        
+        if is_manifold:
+            loss, acc = train_step_manifold(model, optimizer, scheduler, x, y_angle, device)
+        else:
+            loss, acc = train_step_gpt(model, optimizer, scheduler, x, y_class, device)
             
         history["loss"].append(loss)
         history["acc"].append(acc)
-        if i % 10 == 0:
-            pbar.set_postfix(loss=f"{loss:.4f}", acc=f"{acc*100:.1f}%")
+        
+        if i % 100 == 0 and is_manifold:
+            with torch.no_grad():
+                output = model(x[:1, :L], collect_christ=False)
+                x_vals = [st[0, 0].item() for st in output[4]]
+                y_vals = [y_angle[0, t].item() for t in range(L)]
+                all_f = output[5]
+                f_norms = [all_f[0, t].norm().item() for t in range(L)]
+                
+                # Robust Layer Access
+                target_layer = model.layers[0]
+                if hasattr(target_layer, 'macro_manifold'):
+                     target_layer = target_layer.macro_manifold
+                
+                gate_bias = target_layer.christoffels[0].forget_gate.bias.mean().item() if hasattr(target_layer, 'christoffels') else 0.0
+                
+                x0_grad = model.x0.grad.norm().item() if model.x0.grad is not None else 0.0
+                emb_layer = model.embedding.out_proj if hasattr(model.embedding, 'out_proj') else model.embedding
+                emb_grad = next(emb_layer.parameters()).grad.norm().item() if next(emb_layer.parameters()).grad is not None else 0.0
+                
+                imp_val = model.embedding.impulse_scale.item() if hasattr(model.embedding, 'impulse_scale') else 0.0
+                print(f"[Step {i}] Loss: {loss:.4f} | Acc: {acc*100:.1f}% | Impulse: {imp_val:.1f}")
+                for t in range(L):
+                    print(f"  t={t}: x={x_vals[t]:.3f}, target={y_vals[t]:.3f}, force={f_norms[t]:.3f}")
+                print(f"  Friction Bias: {gate_bias:.3f} | Gradients -> x0: {x0_grad:.2e}, Emb: {emb_grad:.2e}")
+                sys.stdout.flush()
+        elif i % 10 == 0:
+            if i % 50 == 0:
+                print(f"Step {i}... Loss: {loss:.4f}, Acc: {acc*100:.1f}%")
+                sys.stdout.flush()
             
     return history
 
@@ -157,7 +213,7 @@ def evaluate_scaling(model, lengths, device='cuda'):
     
     for L in lengths:
         task = ParityTask(length=L)
-        x, y = task.generate_batch(100, device=device)
+        x, y_class, y_angle = task.generate_batch(100, device=device)
         
         def run_inf():
             with torch.no_grad():
@@ -166,15 +222,25 @@ def evaluate_scaling(model, lengths, device='cuda'):
                     state = None
                     preds_list = []
                     for t in range(x.shape[1]):
-                        l, state, _ = model(x[:, t:t+1], state=state)
-                        preds_list.append((l[:, 0, 0] > 0.0).long())
+                        out = model(x[:, t:t+1], state=state)
+                        l = out[0]
+                        state = out[1]
+                        # On Torus: Check distance to PI
+                        PI = 3.14159265359
+                        TWO_PI = 2.0 * PI
+                        dist_to_pi = torch.min(torch.abs(l - PI) % TWO_PI, TWO_PI - (torch.abs(l - PI) % TWO_PI))
+                        dist_to_0 = torch.min(torch.abs(l) % TWO_PI, TWO_PI - (torch.abs(l) % TWO_PI))
+                        # Multi-dimensional Torus: average distance across dimensions
+                        d_pi = dist_to_pi.mean(dim=-1).view(-1)
+                        d_0 = dist_to_0.mean(dim=-1).view(-1)
+                        preds_list.append((d_pi < d_0).long())
                     return torch.stack(preds_list, dim=1)
                 else:
                     return model(x).argmax(dim=-1)
 
         mem = PerformanceStats.measure_peak_memory(model, run_inf)
         preds = run_inf()
-        acc = (preds == y).float().mean().item()
+        acc = (preds == y_class).float().mean().item()
         
         results["acc"].append(acc)
         results["mem"].append(mem)
@@ -188,42 +254,62 @@ def run_superiority_benchmark():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # 1. Models
-    dim = 128
+    dim = 128 # Sufficient capacity
     physics_config = {
-        'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
+        'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16}, 
         'readout': {'type': 'implicit', 'coord_dim': 16},
-        'active_inference': {'enabled': False, 'plasticity': 0.0},
-        'fractal': {'enabled': False}, 
-        'singularities': {'enabled': False, 'strength': 0.0},
+        'active_inference': {
+            'enabled': True, 
+            'dynamic_time': {'enabled': True},
+            'reactive_curvature': {'enabled': True, 'plasticity': 0.2},
+            'singularities': {'enabled': True, 'strength': 20.0, 'threshold': 0.8}
+        },
+        'fractal': {'enabled': True, 'threshold': 0.5, 'alpha': 0.2},
         'topology': {'type': 'torus'},
-        'stability': {'base_dt': 0.3}
+        'stability': {'base_dt': 0.2}
     }
     
-    # LEVEL 28: STABLE NUMERIC SCALE
-    # 5.0 prevents aliasing at dt=0.3
-    impulse_scale = 5.0
+    # FLOW SCALE (Recalibrated for dt=0.2)
+    # Norm(Force) \approx 80 -> impulse_scale \approx 20.
+    # DASH-AND-STOP SCALE (Balanced for Capture)
+    impulse_scale = 80.0 
     manifold = Manifold(
-        vocab_size=2, dim=dim, depth=6, heads=1, 
+        vocab_size=2, dim=dim, depth=6, heads=4, 
         integrator_type='leapfrog',
         physics_config=physics_config,
+        impulse_scale=impulse_scale, 
         holographic=True
     ).to(device)
     
-    # LEVEL 17: Reset to recalibrated stable scale
-    if hasattr(manifold.embedding, 'impulse_scale'):
-        manifold.embedding.impulse_scale = impulse_scale
+    # LEVEL 29: KICKSTART INITIALIZATION
+    with torch.no_grad():
+        # LEVEL 34: SUPER-FLOW INITIALIZATION
+        manifold.x0.data.fill_(0.1) 
+        manifold.x0.requires_grad = True
+        manifold.v0.data.fill_(0.01) 
+        manifold.v0.requires_grad = True
+        # HIGH STATIC FRICTION (Stiff by default to prevent drift)
+        # bias +2.0 -> mu \approx 0.88 * 10 = 8.8
+        # FORCE-TRIGGERED LUBRICATION (Force reduces friction)
+        for layer in manifold.layers:
+             target = layer.macro_manifold if hasattr(layer, 'macro_manifold') else layer
+             if hasattr(target, 'christoffels'):
+                 for head_geo in target.christoffels:
+                  if hasattr(head_geo, 'forget_gate'):
+                       nn.init.constant_(head_geo.forget_gate.bias, 2.0)
+                  if hasattr(head_geo, 'input_gate'):
+                       # Negative weight: Force UP -> Activ DOWN -> Friction DOWN
+                       nn.init.constant_(head_geo.input_gate.weight, -0.5) 
     
-    # Sync Level 3 schedule
-    if hasattr(manifold.readout, 'set_max_steps'):
-        manifold.readout.set_max_steps(1000)
 
     # LEVEL 8: EXPLICIT ZERO DISSIPATION & FLAT METRIC
     # Removed manual patch. Handled by LowRankChristoffel internally.
     gpt = MicroGPT(vocab_size=2, dim=dim, depth=6, heads=1, max_len=100000).to(device)
     
     # 2. Training Phase
-    h_m = train_model(manifold, max_steps=1000, device=device)
-    h_g = train_model(gpt, max_steps=1200, device=device)
+    # Increased steps for Fractal convergence
+    h_m = train_model(manifold, max_steps=6000, device=device)
+    h_g = train_model(gpt, max_steps=6000, device=device)
     
     # 3. Scaling Phase
     # Paper claims 100,000. Let's push to 10,000 for this run.

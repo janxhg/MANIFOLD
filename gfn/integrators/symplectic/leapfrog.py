@@ -10,6 +10,11 @@ try:
 except ImportError:
     CUDA_AVAILABLE = False
 
+try:
+    from gfn.geometry.boundaries import apply_boundary_python
+except ImportError:
+    def apply_boundary_python(x, tid): return x
+
 class LeapfrogIntegrator(nn.Module):
     def __init__(self, christoffel, dt=0.01):
         super().__init__()
@@ -54,6 +59,10 @@ class LeapfrogIntegrator(nn.Module):
                 
                 # 2. Drift (full step position)
                 curr_x = curr_x + effective_dt * v_half
+                
+                # Apply Boundary (Torus)
+                topology_id = kwargs.get('topology', 0)
+                curr_x = apply_boundary_python(curr_x, topology_id)
                 
                 # 3. Kick (half step velocity at new pos)
                 res_half = self.christoffel(v_half, curr_x, force=force, **kwargs)

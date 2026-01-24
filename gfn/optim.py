@@ -132,6 +132,12 @@ class RiemannianAdam(Optimizer):
                         if norm > max_norm:
                             p.data.mul_(max_norm / norm)
                             
+                elif retraction == 'torus':
+                    # Toroidal retraction: periodic wrapping [0, 2*PI)
+                    p.data.add_(step_direction, alpha=-lr)
+                    TWO_PI = 2.0 * 3.14159265359
+                    p.data.copy_(torch.remainder(p.data, TWO_PI))
+                    
                 else:
                     # Unknown retraction, use Euclidean
                     p.data.add_(step_direction, alpha=-lr)

@@ -26,6 +26,10 @@ except ImportError:
         # Not found, will use Python fallback
         pass
 
+# # # FORCE DISABLE CUDA FOR ARCHITECTURE DEBUGGING # # #
+CUDA_AVAILABLE = False 
+# # # # # # # # # # # # # # # # # # # # # # # # # # #
+
 def christoffel_fused(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0, topology=0):
     """
     Modular Riemannian Christoffel Symbol Projection.
@@ -73,7 +77,7 @@ def leapfrog_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0):
     """
     if CUDA_AVAILABLE and x.is_cuda and x.dim() == 2:
         from .autograd import leapfrog_fused_autograd
-        res = leapfrog_fused_autograd(x, v, f, U, W, dt, dt_scale, steps)
+        res = leapfrog_fused_autograd(x, v, f, U, W, dt, dt_scale, steps, topology)
         if res is not None: return res
     
     # Python Fallback used for Torus (Stable Path)
@@ -82,7 +86,7 @@ def leapfrog_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0):
     v_new = v + dt * (f - gamma)
     x_new = x + dt * v_new
     if topology == 1: # Toroidal Boundary
-         from gfn.cuda.include.boundaries_python import apply_boundary_python
+         from gfn.geometry.boundaries import apply_boundary_python
          x_new = apply_boundary_python(x_new, 1)
     return x_new, v_new
 
@@ -90,7 +94,7 @@ def recurrent_manifold_fused(x, v, f, U_stack, W_stack, dt, dt_scales, forget_ra
     """
     Professional Trajectory Fusion for High-Performance Sequence Training.
     """
-    if CUDA_AVAILABLE and x.is_cuda and topology == 0: # Disable for Torus (NANS risk)
+    if CUDA_AVAILABLE and x.is_cuda: # Enabled for Torus (Fixed kernels)
         from .autograd import recurrent_manifold_fused_autograd
         return recurrent_manifold_fused_autograd(x, v, f, U_stack, W_stack, dt, dt_scales, forget_rates, num_heads, plasticity, sing_thresh, sing_strength, mix_x, mix_v, Wf, Wi, bf, topology)
     return None # Use Python Sequence Loop (Autograd managed)

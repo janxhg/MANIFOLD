@@ -52,9 +52,12 @@ class Manifold(nn.Module):
         elif emb_type == 'functional':
             from .embeddings import FunctionalEmbedding
             coord_dim = emb_cfg.get('coord_dim', 16)
-            mode = emb_cfg.get('mode', 'binary') # Default to binary now
-            print(f"[*] Using FUNCTIONAL Neural Embeddings ({mode.upper()}, coord_dim={coord_dim})")
-            self.embedding = FunctionalEmbedding(vocab_size, dim, coord_dim=coord_dim, mode=mode)
+            mode = emb_cfg.get('mode', 'binary') 
+            # Respect explicit argument or config
+            imp = impulse_scale if impulse_scale is not None else emb_cfg.get('impulse_scale', 1.0)
+            omega_0 = emb_cfg.get('omega_0', 30.0)
+            print(f"[*] Using FUNCTIONAL Neural Embeddings ({mode.upper()}, coord_dim={coord_dim}, impulse={imp})")
+            self.embedding = FunctionalEmbedding(vocab_size, dim, coord_dim=coord_dim, mode=mode, impulse_scale=imp, omega_0=omega_0)
         else:
             self.embedding = nn.Embedding(vocab_size, dim)
         
@@ -107,6 +110,21 @@ class Manifold(nn.Module):
         self.apply(self._init_weights)
         
     def _init_weights(self, module):
+        # LEVEL 28: DO NOT OVERWRITE specialized functional embedding weights
+        # We check both the module itself and its class name for robustness
+        from .embeddings import FunctionalEmbedding
+        if isinstance(module, FunctionalEmbedding):
+            return
+            
+        # Recursive check to prevent overwriting children of FunctionalEmbedding
+        # (like out_proj)
+        if hasattr(self, 'embedding') and isinstance(self.embedding, FunctionalEmbedding):
+            # If the module is a parameter or child of self.embedding, skip it
+            emb_params = set(self.embedding.parameters())
+            mod_params = set(module.parameters())
+            if mod_params.issubset(emb_params) and len(mod_params) > 0:
+                return
+
         if isinstance(module, nn.Linear):
             # LEVEL 5: READOUT SCALE ALIGNMENT
             # Readout needs higher variance to overcome temperature annealing
@@ -199,13 +217,15 @@ class Manifold(nn.Module):
             # Context state
             context = None
             
-            # Trajectory Fusion Path: Fuses Seq_Len × Depth × Heads into ONE kernel launch.
-            # LEVEL 28: Disable fusion for Torus to ensure stable unrolling of periodic features.
+            # LEVEL 28: Fused Toroidal support.
+            # We temporarily fallback to Python sequence loop for Torus to ensure 100% gradient accuracy
+            # while CUDA backward kernels (dL/dx) are being synchronized in the workshop.
             topo_cfg = self.physics_config.get('topology', {})
             topology_type = topo_cfg.get('type', 'euclidean')
             is_torus = (topology_type == 'torus')
             
-            can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ and not is_torus)
+            # can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ) # Full Fusion
+            can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ and not is_torus) # Hybrid Mode
             
             if can_fuse:
                 try:
@@ -304,6 +324,9 @@ class Manifold(nn.Module):
                                 plasticity, sing_thresh, sing_strength,
                                 mix_x, mix_v, W_f_stack, W_i_stack, b_f_stack, topology_id
                             )
+                            # recurrent_manifold_fused_autograd returns (x_final, v_final, x_seq, reg_loss)
+                            # We don't have v_seq from kernel yet, but we return sequences for the loss
+                            return res[0], (res[0], res[1]), [], [], res[2], all_forces
                         else:
                             # LEVEL 17: TOPOLOGICAL INTEGRITY (Inference)
                             x_in = x
@@ -341,6 +364,8 @@ class Manifold(nn.Module):
                     print(f"[MANIFOLD] Fused Kernel Failed: {e}")
                     pass
 
+            v_seq = []
+            x_seq = []
             for t in range(seq_len):
                 # Get force and mask for current timestep
                 force = all_forces[:, t] * mask[:, t]
@@ -350,6 +375,9 @@ class Manifold(nn.Module):
                     x, v, context, layer_christoffels = layer(x, v, force, context, collect_christ=collect_christ)
                     if collect_christ:
                         all_christoffels.extend(layer_christoffels) 
+                
+                v_seq.append(v)
+                x_seq.append(x)
                 
                 # Readout: project position to vocabulary logits
                 out = x
@@ -361,7 +389,7 @@ class Manifold(nn.Module):
             # Stack all logits
             logits = torch.cat(logits_list, dim=1)  # [batch, seq_len, vocab_size]
             
-            return logits, (x, v), all_christoffels
+            return logits, (x, v), all_christoffels, v_seq, x_seq, all_forces
     
     def generate(self, prompt_ids, max_new_tokens=50, temperature=1.0, top_k=None, top_p=None):
         """

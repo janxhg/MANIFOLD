@@ -10,13 +10,18 @@ try:
 except ImportError:
     CUDA_AVAILABLE = False
 
+try:
+    from gfn.geometry.boundaries import apply_boundary_python
+except ImportError:
+    def apply_boundary_python(x, tid): return x
+
 class RK4Integrator(nn.Module):
     def __init__(self, christoffel, dt=0.01):
         super().__init__()
         self.christoffel = christoffel
         self.dt = dt
 
-    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False):
+    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False, **kwargs):
         # Try Professional Fused CUDA Kernel
         if CUDA_AVAILABLE and x.is_cuda and not collect_christ:
             try:
@@ -36,6 +41,11 @@ class RK4Integrator(nn.Module):
                 if force is not None:
                     acc = acc + force
                 return acc
+            
+            # Determine Topology
+            topo_id = getattr(self.christoffel, 'topology_id', 0)
+            if topo_id == 0 and hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus:
+                 topo_id = 1
                 
             # k1
             dx1 = curr_v
@@ -43,24 +53,25 @@ class RK4Integrator(nn.Module):
             
             # k2
             v2 = curr_v + 0.5 * dt * dv1
-            x2 = curr_x + 0.5 * dt * dx1
+            x2 = apply_boundary_python(curr_x + 0.5 * dt * dx1, topo_id)
             dx2 = v2
             dv2 = dynamics(x2, v2)
             
             # k3
             v3 = curr_v + 0.5 * dt * dv2
-            x3 = curr_x + 0.5 * dt * dx2
+            x3 = apply_boundary_python(curr_x + 0.5 * dt * dx2, topo_id)
             dx3 = v3
             dv3 = dynamics(x3, v3)
             
             # k4
             v4 = curr_v + dt * dv3
-            x4 = curr_x + dt * dx3
+            x4 = apply_boundary_python(curr_x + dt * dx3, topo_id)
             dx4 = v4
             dv4 = dynamics(x4, v4)
             
             # Update
             curr_x = curr_x + (dt / 6.0) * (dx1 + 2*dx2 + 2*dx3 + dx4)
+            curr_x = apply_boundary_python(curr_x, topo_id)
             curr_v = curr_v + (dt / 6.0) * (dv1 + 2*dv2 + 2*dv3 + dv4)
         
         return curr_x, curr_v

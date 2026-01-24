@@ -1,8 +1,8 @@
 # THE FUNCTIONAL MANIFOLD HYPOTHESIS: Unifying Memory and Computation via Geometric Flows
 
-**Author:** Joaquin Stürtz & Antigravity (AI)
+**Author:** Joaquin Stürtz
 **Date:** January 24, 2026
-**Status:** Theoretical Framework (Level 13)
+**Status:** Theoretical Framework
 
 ---
 

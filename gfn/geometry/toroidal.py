@@ -23,7 +23,48 @@ class ToroidalChristoffel(nn.Module):
         self.R = self.config.get('topology', {}).get('major_radius', 2.0)
         self.r = self.config.get('topology', {}).get('minor_radius', 1.0)
         
-    def forward(self, v, x, **kwargs):
+        # Friction Gates (The Clutch)
+        # Input to gates: [batch, 2*dim] (sin(x), cos(x))
+        gate_input_dim = 2 * dim
+        
+        # State component of friction gate
+        self.forget_gate = nn.Linear(gate_input_dim, dim)
+        nn.init.normal_(self.forget_gate.weight, std=0.01)
+        nn.init.constant_(self.forget_gate.bias, 0.0) 
+        
+        # Force component of friction gate
+        self.input_gate = nn.Linear(dim, dim, bias=False)
+        nn.init.normal_(self.input_gate.weight, std=0.01)
+
+        self.clamp_val = self.config.get('stability', {}).get('curvature_clamp', 5.0)
+        
+        # ACTIVE INFERENCE (Restored for Torus)
+        self.active_cfg = self.config.get('active_inference', {})
+        self.plasticity = self.active_cfg.get('reactive_curvature', {}).get('plasticity', 0.1)
+        self.singularity_threshold = self.active_cfg.get('singularities', {}).get('threshold', 0.8)
+        self.black_hole_strength = self.active_cfg.get('singularities', {}).get('strength', 10.0)
+        
+        # Potential Gate for Singularities
+        self.V = nn.Linear(gate_input_dim, 1) if self.active_cfg.get('singularities', {}).get('enabled', False) else None
+        if self.V:
+             nn.init.constant_(self.V.bias, -2.0) # Start with no singularities
+        
+    def get_metric(self, x):
+        """
+        Returns diagonal metric tensor g_ii(x).
+        g_theta = r^2
+        g_phi = (R + r cos theta)^2
+        """
+        g = torch.ones_like(x)
+        for i in range(0, self.dim - 1, 2):
+            th = x[..., i]
+            # g[..., i] = r^2
+            g[..., i] = self.r**2
+            # g[..., i+1] = (R + r cos th)^2
+            g[..., i+1] = (self.R + self.r * torch.cos(th))**2
+        return g
+
+    def forward(self, v, x=None, force=None, **kwargs):
         """
         Computed Christoffel Force: Gamma(v, v)^k = Gamma^k_ij v^i v^j
         """
@@ -68,4 +109,38 @@ class ToroidalChristoffel(nn.Module):
             term_ph = -(self.r * torch.sin(th)) / (self.R + self.r * torch.cos(th))
             gamma[..., i+1] = 2.0 * term_ph * v_ph * v_th
             
-        return gamma * 0.1 # Scaling for stability
+        gamma = gamma * 0.05 # Strong Curvature (User Requested Full Torus)
+        
+        # APPLY THE CLUTCH (DYNAMIC FRICTION)
+        # Map to Periodic Space: [sin(x), cos(x)]
+        x_in = torch.cat([sin_th, cos_th], dim=-1)
+             
+        # Base friction from state
+        gate_activ = self.forget_gate(x_in)
+        
+        if force is not None:
+            gate_activ = gate_activ + self.input_gate(force)
+            
+        # Level 34: BRAKING POWER (STIFFNESS)
+        # Higher mu to stop v=~15 in one step at dt=0.2
+        mu = torch.sigmoid(gate_activ) * 10.0
+        
+        # ACTIVE INFERENCE LOGIC (Triad v2.0)
+        if self.active_cfg.get('enabled', False):
+             # 1. Reactive Curvature (Plasticity)
+             if self.active_cfg.get('reactive_curvature', {}).get('enabled', False):
+                  energy = torch.tanh(v.pow(2).mean(dim=-1, keepdim=True))
+                  gamma = gamma * (1.0 + self.plasticity * energy)
+                  
+             # 2. Logical Singularities (Black Holes)
+             if self.active_cfg.get('singularities', {}).get('enabled', False) and self.V is not None:
+                  potential = torch.sigmoid(self.V(x_in))
+                  is_singularity = (potential > self.singularity_threshold).float()
+                  gamma = gamma * (1.0 + is_singularity * (self.black_hole_strength - 1.0))
+
+        # If we want to return BOTH for implicit integration
+        if getattr(self, 'return_friction_separately', False):
+             return gamma, mu
+             
+        gamma = gamma + mu * v
+        return gamma

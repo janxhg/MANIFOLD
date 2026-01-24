@@ -70,13 +70,18 @@ class MLayer(nn.Module):
 
         # Manifold Factory
         def create_manifold(head_idx):
+            topo_type = self.physics_config.get('topology', {}).get('type', 'euclidean').lower()
+            is_torus = (topo_type == 'torus')
+
             if not mixture_enabled:
                  # Standard Behavior
                  hyper = self.physics_config.get('hyper_curvature', {}).get('enabled', False)
-                 if hyper:
-                     return HyperChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+                 if is_torus:
+                      return ToroidalChristoffel(self.head_dim, physics_config=self.physics_config)
+                 elif hyper:
+                      return HyperChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
                  else:
-                     return ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
+                      return ReactiveChristoffel(self.head_dim, head_rank, physics_config=self.physics_config)
             
             # Mixture allocation
             # components: {'euclidean': [0], 'hyperbolic': [1], 'spherical': [2], 'learnable': [3]}
@@ -139,29 +144,30 @@ class MLayer(nn.Module):
         # Check if "Autonomous Geometric Attention" (Dynamic Time) is enabled
         self.use_dynamic_time = self.physics_config.get('active_inference', {}).get('dynamic_time', {}).get('enabled', False)
         
-        if self.use_dynamic_time:
-            self.time_heads = None 
-            self.gatings = None
-            print("Warning: dynamic_time enabled in config but code support was removed. Using scalar dt.")
-        else:
-            # Gating per head (Legacy Static Wormholes)
-            self.gatings = nn.ModuleList([
-                RiemannianGating(self.head_dim) for _ in range(heads)
-            ])
-            
-            # Static Wormholes (Multi-Scale Initialization)
-            scale_vals = []
-            for i in range(heads):
-                scale_init = 1.5 ** i
-                val = torch.tensor(scale_init).log() # Initial bias
-                scale_vals.append(val)
-                
-            self.dt_params = nn.Parameter(torch.tensor(scale_vals))
-            self.time_heads = None
-
         # LEVEL 13: TOPOLOGY PARSING
         topo_type = self.physics_config.get('topology', {}).get('type', 'euclidean').lower()
         self.topology_id = 1 if topo_type == 'torus' else 0
+
+        if self.use_dynamic_time:
+            print(f"[*] Autonomous Geometric Attention ENABLED (Time Warping: Dynamic Gating + base_dt={base_dt})")
+        
+        # Gating per head (Riemannian Wormholes)
+        self.gatings = nn.ModuleList([
+            RiemannianGating(self.head_dim, topology=self.topology_id) for _ in range(heads)
+        ])
+        
+        # Static/Initial Wormhole Tuning
+        scale_vals = []
+        for i in range(heads):
+            # Level 33: Alignment with base_dt
+            # We want softplus(val) \approx base_dt / 0.9 initially
+            target_dt = self.base_dt / 0.9
+            val_init = torch.tensor(target_dt).exp().sub(1.0).log()
+            val = val_init + i * 0.1 # Small spread
+            scale_vals.append(val)
+            
+        self.dt_params = nn.Parameter(torch.tensor(scale_vals))
+        self.time_heads = None
 
         self.friction_gates = nn.ModuleList()
         # Stacked weights for Fused Kernel efficiency [Heads, Out, In]
@@ -170,13 +176,15 @@ class MLayer(nn.Module):
         for i in range(heads):
             # Input: x (head_dim) + Force (head_dim) -> Output: Friction (head_dim)
             # For Torus, x is mapped to 2*D features
-            gate_in_dim = (3 if self.topology_id == 1 else 2) * self.head_dim
-            gate = nn.Linear(gate_in_dim, self.head_dim) 
+            # LINK TO CHRISTOFFEL GATES IF AVAILABLE
+            if hasattr(self.christoffels[i], 'forget_gate'):
+                 gate = self.christoffels[i].forget_gate
+            else:
+                 gate_in_dim = (3 if self.topology_id == 1 else 2) * self.head_dim
+                 gate = nn.Linear(gate_in_dim, self.head_dim) 
+                 nn.init.orthogonal_(gate.weight, gain=0.5)
+                 nn.init.constant_(gate.bias, 0.0) 
             
-            # Init: Bias to high friction (+3.0) to start in "Write Mode" (Overdamped)
-            # This prevents initial chaotic explosion.
-            nn.init.orthogonal_(gate.weight, gain=0.5)
-            nn.init.constant_(gate.bias, 3.0) 
             self.friction_gates.append(gate)
 
         # Pre-compute stacked weights for the kernel
@@ -186,29 +194,29 @@ class MLayer(nn.Module):
         for i in range(heads):
             # Integrator setup
             if integrator_type == 'rk4':
-                integ = RK4Integrator(self.christoffels[i], dt=0.1)
+                integ = RK4Integrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'rk45':
                 # Golden Integration
-                integ = DormandPrinceIntegrator(self.christoffels[i], dt=0.1)
+                integ = DormandPrinceIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'heun':
-                integ = HeunIntegrator(self.christoffels[i], dt=0.1)
+                integ = HeunIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'euler':
-                integ = EulerIntegrator(self.christoffels[i], dt=0.1)
+                integ = EulerIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'leapfrog':
-                integ = LeapfrogIntegrator(self.christoffels[i], dt=0.1)
+                integ = LeapfrogIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'yoshida':
-                integ = YoshidaIntegrator(self.christoffels[i], dt=0.1)
+                integ = YoshidaIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'forest_ruth':
-                integ = ForestRuthIntegrator(self.christoffels[i], dt=0.1)
+                integ = ForestRuthIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'omelyan':
-                integ = OmelyanIntegrator(self.christoffels[i], dt=0.1)
+                integ = OmelyanIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'coupling':
-                integ = CouplingFlowIntegrator(self.christoffels[i], dt=0.1)
+                integ = CouplingFlowIntegrator(self.christoffels[i], dt=self.base_dt)
             elif integrator_type == 'neural':
                 # Neural integrator needs dim to build its controller
-                integ = NeuralIntegrator(self.christoffels[i], dt=0.1, dim=self.head_dim)
+                integ = NeuralIntegrator(self.christoffels[i], dt=self.base_dt, dim=self.head_dim)
             else:
-                integ = SymplecticIntegrator(self.christoffels[i], dt=0.1)
+                integ = SymplecticIntegrator(self.christoffels[i], dt=self.base_dt)
             self.integrators.append(integ)
             
         # Output projection for mixing heads
@@ -276,21 +284,29 @@ class MLayer(nn.Module):
         
         for i in range(self.heads):
             # weight: [Out, In]
-            # If Torus: In = 3*D ([sin, cos, force])
-            # If Euclidean: In = 2*D ([x, force])
-            w = self.friction_gates[i].weight
-            b = self.friction_gates[i].bias
-            d = self.head_dim
+            # Handle separate gates or combined gate from Christoffel
+            head_geo = self.christoffels[i]
             
-            if self.topology_id == 1:
-                # W_forget = [D, 2D] (sin, cos)
-                # W_input = [D, D] (force)
-                W_f_list.append(w[:, :2*d])
-                W_i_list.append(w[:, 2*d:])
+            if hasattr(head_geo, 'forget_gate') and hasattr(head_geo, 'input_gate'):
+                # Professional Path: Separate State and Force Gates
+                W_f_list.append(head_geo.forget_gate.weight)
+                W_i_list.append(head_geo.input_gate.weight)
+                b_f_list.append(head_geo.forget_gate.bias)
             else:
-                W_f_list.append(w[:, :d])
-                W_i_list.append(w[:, d:])
-            b_f_list.append(b)
+                # Legacy/Combined Path
+                w = self.friction_gates[i].weight
+                b = self.friction_gates[i].bias
+                d = self.head_dim
+                
+                if self.topology_id == 1:
+                    # W_forget = [D, 2D] (sin, cos)
+                    # W_input = [D, D] (force)
+                    W_f_list.append(w[:, :2*d])
+                    W_i_list.append(w[:, 2*d:])
+                else:
+                    W_f_list.append(w[:, :d])
+                    W_i_list.append(w[:, d:])
+                b_f_list.append(b)
         
         # Note: W_forget_stack will have shape [H, D, 2D] if torus
         W_forget_stack = torch.stack(W_f_list, dim=0).contiguous()
@@ -380,14 +396,16 @@ class MLayer(nn.Module):
             
             v_next = self.out_proj_v(v_cat)
             
-            # Normalize to prevent magnitude creep
-            x_next = self.mixed_norm_x(x_next)
+            # Normalize to prevent magnitude creep (Bypass for Torus to preserve phase)
+            if self.topology_id != 1:
+                x_next = self.mixed_norm_x(x_next)
             v_next = self.mixed_norm_v(v_next)
         else:
             x_next, v_next = x_cat, v_cat
             
         # Velocity Saturation (Relativistic Bounding)
-        v_next = 10.0 * torch.tanh(v_next / 10.0)
+        # LEVEL 34: INCREASED TO 100.0 TO REMOVE "THE BRAKE"
+        v_next = 100.0 * torch.tanh(v_next / 100.0)
             
         context_next = gates.squeeze(-1).transpose(0, 1)
         return x_next, v_next, context_next, christoffel_outputs

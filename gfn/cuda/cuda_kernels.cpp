@@ -11,7 +11,7 @@
 // CRITICAL FIX for CUDA + PyTorch conflict:
 #include <ATen/cuda/CUDAContext.h>
 
-// Forward declarations of CUDA kernels
+// Forward declarations of CUDA launchers (Raw C interface)
 extern "C" void launch_christoffel_fused(
     const float* v, const float* U, const float* W, float* gamma,
     const float* x, const float* V_w,
@@ -71,9 +71,8 @@ extern "C" void launch_recurrent_manifold_backward(
 extern "C" void launch_leapfrog_fused(const float* x, const float* v, const float* f, const float* U, const float* W, float* x_new, float* v_new, float dt, float dt_scale, int batch, int dim, int rank, int steps, int topology, cudaStream_t stream);
 extern "C" void launch_leapfrog_backward(const float* gx_n, const float* gv_n, const float* x, const float* v, const float* f, const float* U, const float* W, float* gx, float* gv, float* gf, float* gU, float* gW, int batch, int dim, int rank, float dt, float dt_s, int steps, int topology, cudaStream_t stream);
 extern "C" void launch_euler_fused(const float* x, const float* v, const float* f, const float* U, const float* W, float* x_new, float* v_new, float dt, float dt_scale, int batch, int dim, int rank, int steps, int topology, cudaStream_t stream);
-extern "C" void launch_yoshida_fused(const float* x, const float* v, const float* f, const float* U, const float* W, const float* V_w, float* x_new, float* v_new, float dt, float dt_scale_scalar, const float* dt_scale_tensor, int batch, int dim, int rank, float plasticity, float sing_thresh, float sing_strength, bool use_active, int steps, int topology, cudaStream_t stream);
 
-// --- PyTorch Wrappers ---
+// --- PyTorch Wrappers (Tensor safe) ---
 
 torch::Tensor christoffel_fused_cuda(torch::Tensor v, torch::Tensor U, torch::Tensor W, torch::Tensor x, torch::Tensor V_w, float plasticity, float sing_thresh, float sing_strength, int topology) {
     auto gamma = torch::empty_like(v);
@@ -93,6 +92,28 @@ std::vector<torch::Tensor> christoffel_backward_cuda(torch::Tensor grad_gamma, t
     if (plasticity != 0.0f) use_active = true;
     launch_christoffel_backward(grad_gamma.data_ptr<float>(), v.data_ptr<float>(), U.data_ptr<float>(), W.data_ptr<float>(), x_ptr, V_ptr, grad_v.data_ptr<float>(), grad_U.data_ptr<float>(), grad_W.data_ptr<float>(), gx_ptr, gV_ptr, v.size(0), v.size(1), U.size(1), plasticity, sing_thresh, sing_strength, use_active, topology, at::cuda::getCurrentCUDAStream());
     return {grad_v, grad_U, grad_W, grad_x, grad_V_w};
+}
+
+std::vector<torch::Tensor> leapfrog_fused_cuda(torch::Tensor x, torch::Tensor v, torch::Tensor f, torch::Tensor U, torch::Tensor W, float dt, float dt_scale, int steps, int topology) {
+    auto x_new = torch::empty_like(x); auto v_new = torch::empty_like(v);
+    const float* f_ptr = (f.numel() > 0) ? f.data_ptr<float>() : nullptr;
+    launch_leapfrog_fused(x.data_ptr<float>(), v.data_ptr<float>(), f_ptr, U.data_ptr<float>(), W.data_ptr<float>(), x_new.data_ptr<float>(), v_new.data_ptr<float>(), dt, dt_scale, x.size(0), x.size(1), U.size(1), steps, topology, at::cuda::getCurrentCUDAStream());
+    return {x_new, v_new};
+}
+
+std::vector<torch::Tensor> leapfrog_backward_cuda(torch::Tensor g_xn, torch::Tensor g_vn, torch::Tensor x, torch::Tensor v, torch::Tensor f, torch::Tensor U, torch::Tensor W, float dt, float dt_scale, int steps, int topology) {
+    auto g_x = torch::zeros_like(x); auto g_v = torch::zeros_like(v); auto g_f = torch::zeros_like(f); auto g_U = torch::zeros_like(U); auto g_W = torch::zeros_like(W);
+    const float* f_ptr = (f.numel() > 0) ? f.data_ptr<float>() : nullptr;
+    float* gf_ptr = (f.numel() > 0) ? g_f.data_ptr<float>() : nullptr;
+    launch_leapfrog_backward(g_xn.data_ptr<float>(), g_vn.data_ptr<float>(), x.data_ptr<float>(), v.data_ptr<float>(), f_ptr, U.data_ptr<float>(), W.data_ptr<float>(), g_x.data_ptr<float>(), g_v.data_ptr<float>(), gf_ptr, g_U.data_ptr<float>(), g_W.data_ptr<float>(), x.size(0), x.size(1), U.size(1), dt, dt_scale, steps, topology, at::cuda::getCurrentCUDAStream());
+    return {g_x, g_v, g_f, g_U, g_W};
+}
+
+std::vector<torch::Tensor> euler_fused_cuda(torch::Tensor x, torch::Tensor v, torch::Tensor f, torch::Tensor U, torch::Tensor W, float dt, float dt_scale, int steps, int topology) {
+    auto x_new = torch::empty_like(x); auto v_new = torch::empty_like(v);
+    const float* f_ptr = (f.numel() > 0) ? f.data_ptr<float>() : nullptr;
+    launch_euler_fused(x.data_ptr<float>(), v.data_ptr<float>(), f_ptr, U.data_ptr<float>(), W.data_ptr<float>(), x_new.data_ptr<float>(), v_new.data_ptr<float>(), dt, dt_scale, x.size(0), x.size(1), U.size(1), steps, topology, at::cuda::getCurrentCUDAStream());
+    return {x_new, v_new};
 }
 
 torch::Tensor reactive_christoffel_forward_cuda(torch::Tensor v, torch::Tensor U, torch::Tensor W, torch::Tensor x, torch::Tensor V_w, float plasticity, float sing_thresh, float sing_strength, int topology) {
@@ -147,7 +168,10 @@ std::vector<torch::Tensor> recurrent_manifold_backward_cuda(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("christoffel_fused", &christoffel_fused_cuda, py::arg("v"), py::arg("U"), py::arg("W"), py::arg("x"), py::arg("V_w"), py::arg("plasticity"), py::arg("sing_thresh"), py::arg("sing_strength"), py::arg("topology")=0);
     m.def("christoffel_backward", &christoffel_backward_cuda, py::arg("grad_gamma"), py::arg("v"), py::arg("U"), py::arg("W"), py::arg("x"), py::arg("V_w"), py::arg("plasticity"), py::arg("sing_thresh"), py::arg("sing_strength"), py::arg("topology")=0);
-    m.def("reactive_christoffel_forward", &reactive_christoffel_forward_cuda, py::arg("v"), py::arg("U"), py::arg("W"), py::arg("x"), py::arg("V_w"), py::arg("plasticity"), py::arg("sing_thresh"), py::arg("sing_strength"), py::arg("topology")=0);
-    m.def("recurrent_manifold_fused", &recurrent_manifold_fused_cuda, py::arg("x_state"), py::arg("v_state"), py::arg("forces"), py::arg("U_stack"), py::arg("W_stack"), py::arg("dt"), py::arg("dt_scales"), py::arg("forget_rates"), py::arg("num_heads"), py::arg("plasticity")=0.0, py::arg("sing_thresh")=1.0, py::arg("sing_strength")=1.0,  py::arg("mix_x")=torch::Tensor(), py::arg("mix_v")=torch::Tensor(), py::arg("W_forget_stack")=torch::Tensor(), py::arg("W_input_stack")=torch::Tensor(), py::arg("b_forget_stack")=torch::Tensor(), py::arg("topology")=0);
+    m.def("reactive_christoffel_forward", &reactive_christoffel_forward_cuda);
+    m.def("recurrent_manifold_fused", &recurrent_manifold_fused_cuda);
     m.def("recurrent_manifold_backward", &recurrent_manifold_backward_cuda);
+    m.def("leapfrog_fused", &leapfrog_fused_cuda);
+    m.def("leapfrog_backward", &leapfrog_backward_cuda);
+    m.def("euler_fused", &euler_fused_cuda);
 }

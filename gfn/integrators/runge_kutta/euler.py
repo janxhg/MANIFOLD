@@ -9,8 +9,10 @@ import torch.nn as nn
 
 try:
     from gfn.cuda.ops import euler_fused, CUDA_AVAILABLE
+    from gfn.cuda.include.boundaries_python import apply_boundary_python
 except ImportError:
     CUDA_AVAILABLE = False
+    def apply_boundary_python(x, tid): return x
 
 class EulerIntegrator(nn.Module):
     def __init__(self, christoffel, dt=0.01):
@@ -39,5 +41,9 @@ class EulerIntegrator(nn.Module):
                 
             curr_x = curr_x + dt * curr_v
             curr_v = curr_v + dt * acc
+            
+            # Apply Boundary (Torus)
+            topo_id = 1 if 'Toroidal' in self.christoffel.__class__.__name__ else 0
+            curr_x = apply_boundary_python(curr_x, topo_id)
         
         return curr_x, curr_v
