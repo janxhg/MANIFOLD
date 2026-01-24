@@ -1,5 +1,6 @@
 
 #include "../../include/christoffel_impl.cuh"
+#include "../../include/boundaries.cuh"
 
 #define BLOCK_SIZE 512
 
@@ -69,6 +70,10 @@ __global__ void recurrent_manifold_fused_kernel(
     float* __restrict__ reg_loss_out, // [B]
     const float* __restrict__ W_mix_x, // [D, D] (Optional)
     const float* __restrict__ W_mix_v, // [D, D] (Optional)
+    // Clutch Stacks (Functional Manifold 2.0)
+    const float* __restrict__ W_forget_stack, // [L*H, D/H, D/H]
+    const float* __restrict__ W_input_stack,  // [L*H, D/H, D/H]
+    const float* __restrict__ b_forget_stack, // [L*H, D/H]
     const int batch,
     const int seq_len,
     const int dim,
@@ -80,7 +85,8 @@ __global__ void recurrent_manifold_fused_kernel(
     const float* __restrict__ forget_rates,
     const float plasticity,
     const float sing_thresh,
-    const float sing_strength
+    const float sing_strength,
+    const int topology
 ) {
     extern __shared__ float s_mem_f[];
     
@@ -97,7 +103,15 @@ __global__ void recurrent_manifold_fused_kernel(
     float* s_temp2 = s_temp + dim;      
     float* s_h     = s_temp2 + dim;     
     
-    double* s_double_base = (double*)(s_h + num_heads * head_rank + 32); 
+    // Manually align float* pointer to next 8-byte boundary for double*
+    // Assumes s_mem_f start is aligned (standard CUDA).
+    // Offset in bytes
+    size_t float_offset = (6 * dim + num_heads * head_rank) * sizeof(float); // s_x .. s_h
+    size_t align_padding = (8 - (float_offset % 8)) % 8;
+    
+    // Adjust base pointer
+    char* s_char_base = (char*)s_mem_f;
+    double* s_double_base = (double*)(s_char_base + float_offset + align_padding);
     
     const int b = blockIdx.x; 
     const int tid = threadIdx.x;
@@ -119,34 +133,14 @@ __global__ void recurrent_manifold_fused_kernel(
         __syncthreads();
         
         for (int l = 0; l < num_layers; l++) {
-            // LEVEL 12: SYMMETRY RESTORATION
-            // Perform Unit-Norm stabilization at the START of the layer.
-            // This ensures the Adjoint BPTT (Backward) matches exactly.
-            for (int h = 0; h < num_heads; h++) {
-                int head_offset = h * dim_per_head;
-                float* s_v_h = s_v + head_offset;
-                float* s_P_scr = (float*)((double*)(s_h + num_heads * head_rank + 32) + 1); 
-
-                float local_v_nsq = 0.0f;
-                for (int i = tid; i < dim_per_head; i += blockDim.x) local_v_nsq += s_v_h[i] * s_v_h[i];
-                
-                if (tid == 0) *s_P_scr = 0.0f;
-                __syncthreads();
-                
-                atomicAdd(s_P_scr, local_v_nsq);
-                __syncthreads();
-                
-                float v_norm_val = sqrtf(*s_P_scr + 1e-6f);
-                for (int i = tid; i < dim_per_head; i += blockDim.x) s_v_h[i] /= v_norm_val;
-                __syncthreads();
-            }
+            // LEVEL 12: SYMMETRY RESTORATION REMOVED (User Instruction: "No hay que normalizar nada")
+            // We skip the unit-norm constraint.
 
             for (int h = 0; h < num_heads; h++) {
                 int head_offset = h * dim_per_head;
                 int layer_head_idx = l * num_heads + h;
                 
                 const float h_dt_scale = dt_scales ? dt_scales[h] : 1.0f;
-                const float h_mu = forget_rates ? forget_rates[h] : 0.05f;
                 const float eff_dt = dt * h_dt_scale * depth_scale;
                 const float half_dt = 0.5f * eff_dt;
                 
@@ -156,35 +150,59 @@ __global__ void recurrent_manifold_fused_kernel(
                 const float* U_h = U_stack + (layer_head_idx * dim_per_head * head_rank);
                 const float* W_h = W_stack + (layer_head_idx * dim_per_head * head_rank);
                 
+                // Clutch weights for this head
+                const float* W_f_h = W_forget_stack + (layer_head_idx * dim_per_head * dim_per_head);
+                const float* W_i_h = W_input_stack + (layer_head_idx * dim_per_head * dim_per_head);
+                const float* b_f_h = b_forget_stack + (layer_head_idx * dim_per_head);
+                const float* s_force_h = s_force + head_offset;
+
                 float* s_h_scratch = s_h + h * head_rank; 
                 double* s_E_scr = s_double_base; 
                 double* s_P_scr = s_E_scr + 1;
                 float* s_M_scr = (float*)(s_P_scr + 1);
+                
+                // Re-purpose s_temp as Friction Buffer (per head)
+                float* s_friction_h = s_temp + head_offset;
 
                 // --- INTEGRATOR (Leapfrog Kick-Drift-Kick with Spring) ---
-                christoffel_device(s_v_h, U_h, W_h, s_gamma_h, s_x_h, nullptr, dim_per_head, head_rank, plasticity, sing_thresh, sing_strength, false, s_h_scratch, s_E_scr, s_P_scr, s_M_scr);
+                
+                // 1. Friction at Step Start
+                compute_friction_device(s_friction_h, s_x_h, s_force_h, W_f_h, W_i_h, b_f_h, dim_per_head, tid, topology);
+                
+                christoffel_device(s_v_h, U_h, W_h, s_gamma_h, s_x_h, nullptr, dim_per_head, head_rank, plasticity, sing_thresh, sing_strength, false, 
+                    s_force_h, W_f_h, W_i_h, b_f_h,
+                    s_h_scratch, s_E_scr, s_P_scr, s_M_scr);
                 __syncthreads();
                 
-                // Kick 1: v = v(1 - 0.5*mu*dt) + half_dt * (F - Gamma)
+                // Kick 1 (Implicit Friction): v = (v + half_dt * (F - Gamma)) / (1 + half_dt * mu)
                 for (int i = tid; i < dim_per_head; i += blockDim.x) {
                     float g = s_gamma_h[i];
-                    float sf = s_force[head_offset + i];
-                    s_v_h[i] = s_v_h[i] * (1.0f - half_dt * h_mu) + half_dt * (sf - g);
+                    float sf = s_force_h[i];
+                    float mu = s_friction_h[i];
+                    s_v_h[i] = (s_v_h[i] + half_dt * (sf - g)) / (1.0f + half_dt * mu);
                 }
                 __syncthreads();
                 
-                // Drift
-                for (int i = tid; i < dim_per_head; i += blockDim.x) s_x_h[i] += eff_dt * s_v_h[i];
+                // Pure Hamiltonian Drift: dx = dt * v
+                for (int i = tid; i < dim_per_head; i += blockDim.x) {
+                    s_x_h[i] = apply_boundary(s_x_h[i] + eff_dt * s_v_h[i], topology);
+                }
                 __syncthreads();
+                
+                // 2. Friction at Step End (Recompute for second kick)
+                // Note: using x_new
+                compute_friction_device(s_friction_h, s_x_h, s_force_h, W_f_h, W_i_h, b_f_h, dim_per_head, tid, topology);
                 
                 // Kick 2
-                christoffel_device(s_v_h, U_h, W_h, s_gamma_h, s_x_h, nullptr, dim_per_head, head_rank, plasticity, sing_thresh, sing_strength, false, s_h_scratch, s_E_scr, s_P_scr, s_M_scr);
+                christoffel_device(s_v_h, U_h, W_h, s_gamma_h, s_x_h, nullptr, dim_per_head, head_rank, plasticity, sing_thresh, sing_strength, false, s_force_h, W_f_h, W_i_h, b_f_h, s_h_scratch, s_E_scr, s_P_scr, s_M_scr);
                 __syncthreads();
                 
+                // Kick 2 (Implicit Friction)
                 for (int i = tid; i < dim_per_head; i += blockDim.x) {
                     float g = s_gamma_h[i]; 
-                    float sf = s_force[head_offset + i];
-                    s_v_h[i] = s_v_h[i] * (1.0f - half_dt * h_mu) + half_dt * (sf - g);
+                    float sf = s_force_h[i];
+                    float mu = s_friction_h[i];
+                    s_v_h[i] = (s_v_h[i] + half_dt * (sf - g)) / (1.0f + half_dt * mu);
                 }
                 __syncthreads();
 
@@ -222,17 +240,22 @@ extern "C" void launch_recurrent_manifold_fused(
     float dt, const float* dt_scales, const float* forget_rates, int num_heads,
     float plasticity, float sing_thresh, float sing_strength,
     const float* W_mix_x, const float* W_mix_v, 
+    // Clutch Buffers
+    const float* W_forget_stack, const float* W_input_stack, const float* b_forget_stack,
+    int topology,
     cudaStream_t stream
 ) {
     const int num_blocks = batch; 
-    const int shared_bytes = (6 * dim + rank + 128) * sizeof(float) + 8 * sizeof(double);
+    const int shared_bytes = (6 * dim + rank + 128) * sizeof(float) + 8 * sizeof(double) + 32; // +32 bytes for alignment safety
     
     cudaMemsetAsync(reg_loss, 0, batch * sizeof(float), stream);
     
     recurrent_manifold_fused_kernel<<<num_blocks, BLOCK_SIZE, shared_bytes, stream>>>(
         x_state, v_state, forces, U_stack, W_stack, x_out_seq, reg_loss, W_mix_x, W_mix_v,
+        W_forget_stack, W_input_stack, b_forget_stack,
         batch, seq_len, dim, rank, num_layers, num_heads, dt, dt_scales, forget_rates,
-        plasticity, sing_thresh, sing_strength
+        plasticity, sing_thresh, sing_strength,
+        topology
     );
 }
 

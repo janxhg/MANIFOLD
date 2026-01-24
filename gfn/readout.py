@@ -18,8 +18,9 @@ class ImplicitReadout(nn.Module):
         super().__init__()
         
         # MLP to output coordinates
+        # TOROIDAL EMBEDDING: Input is doubled (Sin/Cos)
         self.mlp = nn.Sequential(
-            nn.Linear(dim, dim),
+            nn.Linear(dim * 2, dim), 
             nn.GELU(),
             nn.Linear(dim, coord_dim)
         )
@@ -44,21 +45,17 @@ class ImplicitReadout(nn.Module):
         Returns:
             bits_soft: [batch, seq, coord_dim] in range [0, 1]
         """
-        # Get continuous coordinates
-        # LEVEL 3.2: READOUT GAIN ALIGNMENT
-        # Boost gain to ensure signal overcomes initial high temperature
-        coords = self.mlp(x) * 10.0  # [batch, seq, coord_dim]
+        # LEVEL 16: TOROIDAL EMBEDDING
+        # Map x -> [sin(x), cos(x)] to enforce periodicity
+        x_emb = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
         
-        if self.training:
-            # Temperature annealing: high temp early (smooth), low temp late (sharp)
-            progress = min(1.0, self.training_step.float() / self.max_steps)
-            temp = self.temp_init * (1.0 - progress) + self.temp_final * progress
-            
-            # Return raw scaled coordinates for BCEWithLogitsLoss compatibility
-            return coords / temp
-        else:
-            # Inference: return sigmoided bits for discrete prediction
-            return torch.sigmoid(coords / self.temp_final)
+        # LEVEL 20: SIGNAL BOOST
+        # 10.0 constant gain provides sharp gradients for BCE convergence.
+        logits = self.mlp(x_emb) * 10.0 # [batch, seq, coord_dim]
+        
+        return logits
+        # LEVEL 19 REMOVED INFERENCE BRANCH (Moved to generate/testing)
+        # return torch.sigmoid(logits)
     
     def update_step(self):
         """Call this after each optimizer step to update temperature schedule."""

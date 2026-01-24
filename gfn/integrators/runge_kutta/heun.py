@@ -34,7 +34,8 @@ class HeunIntegrator(nn.Module):
             dt = self.dt * dt_scale
             
             def dynamics(current_x, current_v):
-                acc = -self.christoffel(current_v, current_x)
+                # LEVEL 25: CLUTCH CONNECTION
+                acc = -self.christoffel(current_v, current_x, force=force)
                 if force is not None:
                     acc = acc + force
                 return acc

@@ -44,7 +44,7 @@ __global__ void heun_fused_kernel(
 
     for (int s = 0; s < steps; s++) {
         // Predictor: Euler step
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         
         for (int i = tid; i < dim; i += blockDim.x) {
@@ -56,7 +56,7 @@ __global__ void heun_fused_kernel(
         __syncthreads();
 
         // Corrector: Average of initial and predicted accelerations
-        christoffel_device(s_v_pred, U, W, s_gamma + dim, s_x_pred, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v_pred, U, W, s_gamma + dim, s_x_pred, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         
         for (int i = tid; i < dim; i += blockDim.x) {

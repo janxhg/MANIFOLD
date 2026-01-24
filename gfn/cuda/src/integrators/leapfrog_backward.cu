@@ -88,6 +88,7 @@ __global__ void leapfrog_backward_kernel(
         christoffel_device(
             s_v, U, W, s_gamma1, s_x, nullptr,
             dim, rank, 0.0f, 1.0f, 1.0f, false,
+            nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
             s_h, s_E, s_P, s_M_f
         );
         __syncthreads();
@@ -109,6 +110,7 @@ __global__ void leapfrog_backward_kernel(
         christoffel_device(
             s_v_half, U, W, s_gamma2, s_x, nullptr,
             dim, rank, 0.0f, 1.0f, 1.0f, false,
+            nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
             s_h, s_E, s_P, s_M_f
         );
         __syncthreads();

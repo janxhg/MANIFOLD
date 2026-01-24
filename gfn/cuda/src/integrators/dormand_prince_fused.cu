@@ -73,7 +73,7 @@ __global__ void dormand_prince_fused_kernel(
 
     for (int s = 0; s < steps; s++) {
         // Stage 1 (k1)
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -83,7 +83,7 @@ __global__ void dormand_prince_fused_kernel(
         __syncthreads();
 
         // Stage 2 (k2)
-        christoffel_device(s_gamma, U, W, s_k2, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_gamma, U, W, s_k2, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -93,7 +93,7 @@ __global__ void dormand_prince_fused_kernel(
         __syncthreads();
 
         // Stage 3 (k3)
-        christoffel_device(s_gamma, U, W, s_k3, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_gamma, U, W, s_k3, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -103,7 +103,7 @@ __global__ void dormand_prince_fused_kernel(
         __syncthreads();
 
         // Stage 4 (k4)
-        christoffel_device(s_gamma, U, W, s_k4, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_gamma, U, W, s_k4, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -113,7 +113,7 @@ __global__ void dormand_prince_fused_kernel(
         __syncthreads();
 
         // Stage 5 (k5)
-        christoffel_device(s_gamma, U, W, s_k5, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_gamma, U, W, s_k5, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -123,7 +123,7 @@ __global__ void dormand_prince_fused_kernel(
         __syncthreads();
 
         // Stage 6 (k6)
-        christoffel_device(s_gamma, U, W, s_k6, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_gamma, U, W, s_k6, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;

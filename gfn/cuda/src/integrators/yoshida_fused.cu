@@ -64,7 +64,7 @@ __global__ void yoshida_fused_kernel(
         // === Substep 1 ===
         for (int i = tid; i < dim; i += blockDim.x) s_x[i] += c1 * eff_dt * s_v[i];
         __syncthreads();
-        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads(); 
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -75,7 +75,7 @@ __global__ void yoshida_fused_kernel(
         // === Substep 2 ===
         for (int i = tid; i < dim; i += blockDim.x) s_x[i] += c2 * eff_dt * s_v[i];
         __syncthreads();
-        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -86,7 +86,7 @@ __global__ void yoshida_fused_kernel(
          // === Substep 3 ===
         for (int i = tid; i < dim; i += blockDim.x) s_x[i] += c3 * eff_dt * s_v[i];
         __syncthreads();
-        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;

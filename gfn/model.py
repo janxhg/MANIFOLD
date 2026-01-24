@@ -30,7 +30,7 @@ class Manifold(nn.Module):
     """
     
     
-    def __init__(self, vocab_size, dim=256, depth=4, rank=32, heads=4, integrator_type='heun', base_dt=1.0, use_scan=False, physics_config=None):
+    def __init__(self, vocab_size, dim=256, depth=4, rank=32, heads=4, integrator_type='heun', base_dt=1.0, use_scan=False, physics_config=None, impulse_scale=None, holographic=False):
         super().__init__()
         self.dim = dim
         self.depth = depth
@@ -38,6 +38,7 @@ class Manifold(nn.Module):
         self.integrator_type = integrator_type
         self.use_scan = use_scan
         self.physics_config = physics_config or {}
+        self.holographic = holographic or self.physics_config.get('holographic', False)
         
         # Token embedding
         emb_cfg = self.physics_config.get('embedding', {})
@@ -85,8 +86,12 @@ class Manifold(nn.Module):
         if readout_type == 'implicit' or readout_type == 'binary':
              coord_dim = emb_cfg.get('coord_dim', 16) 
              # Level 3: Temperature-Annealed Sigmoid MLP
-             self.readout = ImplicitReadout(dim, coord_dim)
-             print(f"[*] Using IMPLICIT READOUT (Annealed MLP → {coord_dim}-d)")
+             if self.holographic:
+                 self.readout = nn.Identity()
+                 print(f"[*] Using HOLOGRAPHIC READOUT (Identity Map)")
+             else:
+                 self.readout = ImplicitReadout(dim, coord_dim)
+                 print(f"[*] Using IMPLICIT READOUT (Annealed MLP → {coord_dim}-d)")
         else:
              self.readout = nn.Linear(dim, vocab_size)
         
@@ -171,8 +176,9 @@ class Manifold(nn.Module):
             # Final Readout
             # [batch, seq_len, dim]
             x_final = curr_input 
-            out = self.readout_norm(x_final)
-            logits = self.readout(out) # [batch, seq_len, vocab_size]
+            if not self.holographic:
+                x_final = self.readout_norm(x_final)
+            logits = self.readout(x_final) # [batch, seq_len, vocab_size]
             
             # Return last state for compatibility?
             # Just return zeros or last element
@@ -194,9 +200,12 @@ class Manifold(nn.Module):
             context = None
             
             # Trajectory Fusion Path: Fuses Seq_Len × Depth × Heads into ONE kernel launch.
-            # Requirements: no scan, depth > 0, no christoffel metadata collection.
-            # Now supports Multi-Head Mixing!
-            can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ)
+            # LEVEL 28: Disable fusion for Torus to support Periodic Mixing logic.
+            topo_cfg = self.physics_config.get('topology', {})
+            topology_type = topo_cfg.get('type', 'euclidean')
+            is_torus = (topology_type == 'torus')
+            
+            can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ and not is_torus)
             
             if can_fuse:
                 try:
@@ -206,6 +215,11 @@ class Manifold(nn.Module):
                         # The kernel expects: [Layer * Heads, Dim, Rank]
                         U_list = []
                         W_list = []
+                        # LEVEL 26: CLUTCH STACKS
+                        W_forget_list = []
+                        W_input_list = []
+                        b_forget_list = []
+                        
                         for layer in self.layers:
                             # Handle Fractal Wrapper
                             target_layer = layer
@@ -213,10 +227,25 @@ class Manifold(nn.Module):
                                 target_layer = layer.macro_manifold
                                 
                             for head_idx in range(self.heads):
-                                U_list.append(target_layer.christoffels[head_idx].U)
-                                W_list.append(target_layer.christoffels[head_idx].W)
+                                head_geo = target_layer.christoffels[head_idx]
+                                U_list.append(head_geo.U)
+                                W_list.append(head_geo.W)
+                                # Extract Clutch Params
+                                if hasattr(head_geo, 'forget_gate'):
+                                    W_forget_list.append(head_geo.forget_gate.weight)
+                                    b_forget_list.append(head_geo.forget_gate.bias)
+                                    W_input_list.append(head_geo.input_gate.weight)
+                                else:
+                                    # Fallback for old/other christoffels
+                                    W_forget_list.append(torch.zeros(self.dim//self.heads, self.dim//self.heads, device=x.device))
+                                    b_forget_list.append(torch.zeros(self.dim//self.heads, device=x.device))
+                                    W_input_list.append(torch.zeros(self.dim//self.heads, self.dim//self.heads, device=x.device))
+                                    
                         U_stack = torch.stack(U_list)
                         W_stack = torch.stack(W_list)
+                        W_f_stack = torch.stack(W_forget_list)
+                        W_i_stack = torch.stack(W_input_list)
+                        b_f_stack = torch.stack(b_forget_list)
                         # Use base_dt from the first actual MLayer
                         first_layer = self.layers[0]
                         if hasattr(first_layer, 'macro_manifold'): first_layer = first_layer.macro_manifold
@@ -245,15 +274,11 @@ class Manifold(nn.Module):
 
                         if self.training:
                             from .cuda.autograd import recurrent_manifold_fused_autograd
-                            # LEVEL 6: RESTORED NORMALIZATION
-                            # We restore LayerNorm on Hamiltonian state x to prevent explosion.
-                            f_layer = self.layers[0]
-                            if hasattr(f_layer, 'macro_manifold'): f_layer = f_layer.macro_manifold
-                            x_norm = f_layer.norm_x(x)
-                            # LEVEL 8: STRICT UNIT-NORM ENERGY
-                            # Force |v|=1.0 to ensure consistent Hamiltonian momentum across paths
-                            v_norm_val = torch.norm(v, dim=-1, keepdim=True) + 1e-6
-                            v_unit = v / v_norm_val
+                            # LEVEL 17: TOPOLOGICAL INTEGRITY
+                            # We REMOVE LayerNorm and Velocity Norm. 
+                            # Toroidal positions MUST be passed raw to preserve periodicity.
+                            x_in = x
+                            v_in = v
                             
                             # LEVEL 9 & 10: MULTI-SCALE + SPRING MEMORY
                             # Passing learnable dt_params and spring_ks
@@ -269,28 +294,34 @@ class Manifold(nn.Module):
                             if forget_rates.numel() == 1:
                                 forget_rates = forget_rates.expand(self.heads)
                             
+                            # Topology Config
+                            topo_cfg = self.physics_config.get('topology', {})
+                            topology_type = topo_cfg.get('type', 'euclidean')
+                            topology_id = 1 if topology_type == 'torus' else 0
+                            
                             res = recurrent_manifold_fused_autograd(
-                                x_norm, v_unit, all_forces * mask, U_stack, W_stack, base_dt, dt_scales, forget_rates, self.heads,
+                                x_in, v_in, all_forces * mask, U_stack, W_stack, base_dt, dt_scales, forget_rates, self.heads,
                                 plasticity, sing_thresh, sing_strength,
-                                mix_x, mix_v
+                                mix_x, mix_v, W_f_stack, W_i_stack, b_f_stack, topology_id
                             )
                         else:
-                            # Manual Pre-LayerNorm and V-Clamp
-                            f_layer = self.layers[0]
-                            if hasattr(f_layer, 'macro_manifold'): f_layer = f_layer.macro_manifold
-                            
-                            x_norm = f_layer.norm_x(x)
-                            v_norm_val = torch.norm(v, dim=-1, keepdim=True) + 1e-6
-                            v_unit = v / v_norm_val
+                            # LEVEL 17: TOPOLOGICAL INTEGRITY (Inference)
+                            x_in = x
+                            v_in = v
                             
                             # LEVEL 9 & 10 (Inference)
                             dt_scales = torch.nn.functional.softplus(f_layer.dt_params)
                             forget_rates = torch.sigmoid(f_layer.christoffels[0].forget_gate.bias.mean()).expand(self.heads)
                             
+                            # Topology Config
+                            topo_cfg = self.physics_config.get('topology', {})
+                            topology_type = topo_cfg.get('type', 'euclidean')
+                            topology_id = 1 if topology_type == 'torus' else 0
+                            
                             res = recurrent_manifold_fused(
-                                x_norm, v_unit, all_forces * mask, U_stack, W_stack, base_dt, dt_scales, forget_rates, self.heads,
+                                x_in, v_in, all_forces * mask, U_stack, W_stack, base_dt, dt_scales, forget_rates, self.heads,
                                 plasticity, sing_thresh, sing_strength,
-                                mix_x, mix_v
+                                mix_x, mix_v, W_f_stack, W_i_stack, b_f_stack, topology_id
                             )
                         
                         if res is not None:
@@ -299,6 +330,8 @@ class Manifold(nn.Module):
                             # We bypass readout_norm to see the RAW manifold state x.
                             # out_seq = self.readout_norm(x_seq)
                             out_seq = x_seq
+                            if not self.holographic:
+                                out_seq = self.readout_norm(x_seq)
                             logits = self.readout(out_seq)
                             
                             # Note: reg_loss from kernel is [batch], loss functions might expect list
@@ -319,7 +352,9 @@ class Manifold(nn.Module):
                         all_christoffels.extend(layer_christoffels) 
                 
                 # Readout: project position to vocabulary logits
-                out = self.readout_norm(x)
+                out = x
+                if not self.holographic:
+                    out = self.readout_norm(x)
                 logit = self.readout(out)  # [batch, vocab_size]
                 logits_list.append(logit.unsqueeze(1))
             

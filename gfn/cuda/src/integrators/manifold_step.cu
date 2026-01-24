@@ -62,6 +62,7 @@ __global__ void manifold_step_kernel(
     // Compute Geometry
     christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 
                        plasticity, sing_thresh, sing_strength, false,
+                       nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
                        s_h, s_E, s_P, s_M);
     
     __syncthreads();

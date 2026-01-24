@@ -43,7 +43,7 @@ __global__ void leapfrog_fused_kernel(
 
     for (int s = 0; s < steps; s++) {
         // --- Kick (Half) ---
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -58,7 +58,7 @@ __global__ void leapfrog_fused_kernel(
         __syncthreads();
 
         // --- Kick (Half) ---
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;

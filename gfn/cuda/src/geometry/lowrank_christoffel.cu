@@ -41,9 +41,10 @@ __global__ void lowrank_christoffel_forward_kernel(
     // Note: We pass plasticity=0.0 and use_active=false to bypass reactive logic
     christoffel_device(
         v + b * dim, U, W, gamma + b * dim, 
-        nullptr, nullptr, // x and V_w handled separately for modularity or if we want integrated
+        nullptr, nullptr, // x and V_w handled separately
         dim, rank, 
         0.0f, 1.0f, 1.0f, false, 
+        nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
         s_h, &s_E, &s_P, &s_M
     );
     __syncthreads();

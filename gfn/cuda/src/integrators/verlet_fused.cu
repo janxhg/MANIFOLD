@@ -49,7 +49,7 @@ __global__ void verlet_fused_kernel(
         __syncthreads();
 
         // a = f - Γ(v)
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         
         // v_new = v + dt * a

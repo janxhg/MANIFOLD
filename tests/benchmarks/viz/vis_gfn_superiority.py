@@ -30,6 +30,17 @@ from gfn.losses import geodesic_regularization
 from tests.benchmarks.baselines import MicroGPT
 from tests.benchmarks.bench_utils import ResultsLogger, PerformanceStats
 
+class PeriodicLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, pred, target):
+        # pred: [batch, 1] angle in radians
+        # target: [batch, 1] angle in radians
+        # L = 1 - cos(pred - target)
+        # Minimized when pred = target + 2k*pi
+        return (1.0 - torch.cos(pred - target)).mean()
+
 class ParityTask:
     """Parity Check (Modulo 2) for state tracking."""
     def __init__(self, vocab_size=2, length=20, mod=2):
@@ -39,41 +50,63 @@ class ParityTask:
         
     def generate_batch(self, batch_size, device='cpu'):
         x = torch.randint(0, self.vocab_size, (batch_size, self.length), device=device)
-        y = torch.cumsum(x, dim=1) % self.mod
+        y_int = torch.cumsum(x, dim=1) % self.mod
+        
+        # Topological Mapping: 0 -> 0.0, 1 -> PI
+        PI = 3.14159265359
+        y = y_int.float() * PI
         return x, y
 
 def train_step_manifold(model, optimizer, scheduler, inputs, targets, device):
     optimizer.zero_grad()
     # CRITICAL: collect_christ=False to enable CUDA fused kernel
-    logits, (x_final, v_final), christoffels = model(inputs, collect_christ=False)
+    # Model output depends on architecture. 
+    # If Manifold, it returns (x_next, v_next, context, christoffels)
+    # We want x_next.
+    output = model(inputs, collect_christ=False)
     
-    # Implicit Readout Target Alignment
-    coord_dim = model.physics_config.get('embedding', {}).get('coord_dim', 16)
-    mask = 2**torch.arange(coord_dim).to(device)
-    target_bits = (targets.unsqueeze(-1) & mask) > 0
-    target_bits = target_bits.float() # Standard 0/1
+    if isinstance(output, tuple):
+        # output[0] is logits [batch, seq_len, dim] (because Holographic Identity readout)
+        # We take dimension 0 as the "answer" channel.
+        x_pred = output[0][:, :, 0] # [batch, seq_len]
+    else:
+        x_pred = output[:, :, 0]
+        
+    y_float = targets.float()
     
-    # Classification Loss (BCE for relevant bit)
-    loss_bce = nn.BCEWithLogitsLoss()(logits[:, :, 0], target_bits[:, :, 0])
+    # HOLOGRAPHIC MODE: Pred is state x. Target is y (coordinate).
+    # Periodic Loss: 1 - cos(pred - target)
+    loss_val = (1.0 - torch.cos(x_pred - y_float)).mean()
     
     loss_phy = 0.0
-    if christoffels:
-        loss_phy = geodesic_regularization(None, christoffels, lambda_g=0.001)
+    # Retrieve christoffels if available in output tuple (index 3)
+    if isinstance(output, tuple) and len(output) > 3:
+        christoffels = output[3]
+        if christoffels:
+            loss_phy = geodesic_regularization(None, christoffels, lambda_g=0.001)
         
-    total_loss = loss_bce + loss_phy
+    total_loss = loss_val + loss_phy
+    
+    if torch.isnan(total_loss):
+        print("NaN detected in loss!")
+        return total_loss, 0.0
+        
     total_loss.backward()
-    # Level 12: Relaxed clipping to escape 0.69
+    
+    # Level 23: Relaxed Clipping (Soft Norm)
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    
     optimizer.step()
     if scheduler: scheduler.step()
     
-    pred_bits = (logits[:, :, 0] > 0.0).long()
-    acc = (pred_bits == targets).float().mean().item()
+    # Accuracy: Check if distance < PI/2
+    with torch.no_grad():
+        diff = torch.abs(x_pred - y_float)
+        # Toroidal wrapping for metric
+        PI = 3.14159265359
+        diff = torch.min(diff, 2*PI - diff)
+        acc = (diff < (PI / 2)).float().mean().item()
     
-    # Level 3: Update temperature schedule
-    if hasattr(model.readout, 'update_step'):
-        model.readout.update_step()
-        
     return total_loss.item(), acc
 
 def train_step_gpt(model, optimizer, scheduler, inputs, targets, device):
@@ -93,7 +126,8 @@ def train_step_gpt(model, optimizer, scheduler, inputs, targets, device):
 def train_model(model, max_steps=1000, device='cuda'):
     is_manifold = isinstance(model, Manifold)
     if is_manifold:
-        optimizer = RiemannianAdam(model.parameters(), lr=3e-4, weight_decay=1e-4)
+        # Phase 25: Standard AdamW is sufficient for Flat Torus + Clutch
+        optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     else:
         optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
 
@@ -158,36 +192,42 @@ def run_superiority_benchmark():
     physics_config = {
         'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
         'readout': {'type': 'implicit', 'coord_dim': 16},
-        'active_inference': {'enabled': True, 'plasticity': 0.1},
-        'fractal': {'enabled': True}, 
-        'singularities': {'enabled': True, 'strength': 5.0}
+        'active_inference': {'enabled': False, 'plasticity': 0.0},
+        'fractal': {'enabled': False}, 
+        'singularities': {'enabled': False, 'strength': 0.0},
+        'topology': {'type': 'torus'},
+        'stability': {'base_dt': 0.3}
     }
     
-    # LEVEL 12: FORCE AMPLIFICATION
-    # Scaling input forces by 10x to ensure representational separability
+    # LEVEL 28: STABLE NUMERIC SCALE
+    # 5.0 prevents aliasing at dt=0.3
+    impulse_scale = 5.0
     manifold = Manifold(
         vocab_size=2, dim=dim, depth=6, heads=1, 
         integrator_type='leapfrog',
-        physics_config=physics_config
+        physics_config=physics_config,
+        holographic=True
     ).to(device)
     
-    # Ensure impulse embedding is energetic
-    # LEVEL 12: Reset to stable scale (CUDA reduction fix handles normalization)
+    # LEVEL 17: Reset to recalibrated stable scale
     if hasattr(manifold.embedding, 'impulse_scale'):
-        manifold.embedding.impulse_scale = 2.0
+        manifold.embedding.impulse_scale = impulse_scale
     
     # Sync Level 3 schedule
     if hasattr(manifold.readout, 'set_max_steps'):
         manifold.readout.set_max_steps(1000)
-        
-    gpt = MicroGPT(vocab_size=2, dim=dim, depth=6, heads=1, max_len=2000).to(device)
+
+    # LEVEL 8: EXPLICIT ZERO DISSIPATION & FLAT METRIC
+    # Removed manual patch. Handled by LowRankChristoffel internally.
+    gpt = MicroGPT(vocab_size=2, dim=dim, depth=6, heads=1, max_len=100000).to(device)
     
     # 2. Training Phase
-    h_m = train_model(manifold, max_steps=1000, device=device)
+    h_m = train_model(manifold, max_steps=10000, device=device)
     h_g = train_model(gpt, max_steps=1200, device=device)
     
     # 3. Scaling Phase
-    lengths = [20, 50, 100, 200, 500, 1000, 2000]
+    # Paper claims 100,000. Let's push to 10,000 for this run.
+    lengths = [20, 100, 500, 1000, 5000, 10000]
     print("\n--- Evaluating Manifold Scaling ---")
     s_m = evaluate_scaling(manifold, lengths, device)
     print("\n--- Evaluating GPT Scaling ---")

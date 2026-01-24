@@ -40,6 +40,7 @@ __global__ void reactive_christoffel_forward_kernel(
         (x != nullptr) ? (x + b * dim) : nullptr, V_w, 
         dim, rank, 
         plasticity, sing_thresh, sing_strength, true, // use_active=true
+        nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
         s_h, &s_E, &s_P, &s_M
     );
 }

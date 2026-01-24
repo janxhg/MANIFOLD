@@ -172,11 +172,13 @@ def leapfrog_fused_autograd(x, v, f, U, W, dt, dt_scale, steps):
 
 class RecurrentManifoldFusedFn(Function):
     @staticmethod
-    def forward(ctx, x, v, f, U, W, dt, dt_scales, forget_rates, num_heads, plasticity, sing_thresh, sing_strength, mix_x=None, mix_v=None):
-        ctx.save_for_backward(x, v, f, U, W, dt_scales, forget_rates)
+    def forward(ctx, x, v, f, U, W, dt, dt_scales, forget_rates, num_heads, plasticity, sing_thresh, sing_strength, 
+                mix_x=None, mix_v=None, W_f_stack=None, W_i_stack=None, b_f_stack=None, topology=0):
+        ctx.save_for_backward(x, v, f, U, W, dt_scales, forget_rates, W_f_stack, W_i_stack, b_f_stack)
         ctx.dt, ctx.num_heads = dt, num_heads
         ctx.plasticity, ctx.sing_thresh, ctx.sing_strength = plasticity, sing_thresh, sing_strength
         ctx.mix_x, ctx.mix_v = mix_x, mix_v
+        ctx.topology = topology
         
         mix_x_in = mix_x if mix_x is not None else torch.empty(0, device=x.device)
         mix_v_in = mix_v if mix_v is not None else torch.empty(0, device=x.device)
@@ -185,13 +187,15 @@ class RecurrentManifoldFusedFn(Function):
                                                U.contiguous(), W.contiguous(), dt, 
                                                dt_scales.contiguous(), forget_rates.contiguous(), num_heads,
                                                plasticity, sing_thresh, sing_strength,
-                                               mix_x_in.contiguous(), mix_v_in.contiguous())
+                                               mix_x_in.contiguous(), mix_v_in.contiguous(), 
+                                               W_f_stack, W_i_stack, b_f_stack,
+                                               topology)
         x_state, v_state, x_out_seq, reg_loss = res
         return x_state, v_state, x_out_seq, reg_loss
 
     @staticmethod
     def backward(ctx, grad_x_final, grad_v_final, grad_x_seq, grad_reg_loss):
-        x0, v0, f_seq, U_stack, W_stack, dt_scales, forget_rates = ctx.saved_tensors
+        x0, v0, f_seq, U_stack, W_stack, dt_scales, forget_rates, W_f_s, W_i_s, b_f_s = ctx.saved_tensors
         B, T, D = f_seq.shape
         H, dt = ctx.num_heads, ctx.dt
         pl, st, ss = ctx.plasticity, ctx.sing_thresh, ctx.sing_strength
@@ -207,7 +211,9 @@ class RecurrentManifoldFusedFn(Function):
              res = gfn_cuda.recurrent_manifold_fused(
                 x0.contiguous(), v0.contiguous(), f_seq.contiguous(), 
                 U_stack.contiguous(), W_stack.contiguous(), dt, dt_scales.contiguous(), forget_rates.contiguous(), H,
-                pl, st, ss, mix_x_in.contiguous(), mix_v_in.contiguous())
+                pl, st, ss, mix_x_in.contiguous(), mix_v_in.contiguous(), 
+                W_f_s, W_i_s, b_f_s,
+                ctx.topology)
              x_final, v_final, _, _ = res
         
         grads = gfn_cuda.recurrent_manifold_backward(
@@ -215,14 +221,16 @@ class RecurrentManifoldFusedFn(Function):
             x_final, v_final, 
             f_seq.contiguous(), U_stack.contiguous(), W_stack.contiguous(),
             dt, dt_scales.contiguous(), forget_rates.contiguous(), H,
-            pl, st, ss, mix_x_in.contiguous(), mix_v_in.contiguous()
+            pl, st, ss, mix_x_in.contiguous(), mix_v_in.contiguous(), 
+            W_f_s, W_i_s, b_f_s,
+            ctx.topology
         )
         
-        grad_x_init, grad_v_init, grad_f, grad_U, grad_W, grad_mix_x, grad_mix_v, grad_forget_rates = grads
+        grad_x_init, grad_v_init, grad_f, grad_U, grad_W, grad_mix_x, grad_mix_v, grad_forget_rates, grad_W_f, grad_W_i, grad_b_f = grads
         
-        return grad_x_init, grad_v_init, grad_f, grad_U, grad_W, None, None, grad_forget_rates, None, None, None, None, (grad_mix_x if mix_x is not None else None), (grad_mix_v if mix_v is not None else None)
+        return grad_x_init, grad_v_init, grad_f, grad_U, grad_W, None, None, grad_forget_rates, None, None, None, None, (grad_mix_x if mix_x is not None else None), (grad_mix_v if mix_v is not None else None), grad_W_f, grad_W_i, grad_b_f, None
 
-def recurrent_manifold_fused_autograd(x, v, f, U, W, dt, dt_scales, forget_rates, num_heads, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0, mix_x=None, mix_v=None):
+def recurrent_manifold_fused_autograd(x, v, f, U, W, dt, dt_scales, forget_rates, num_heads, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0, mix_x=None, mix_v=None, W_f_stack=None, W_i_stack=None, b_f_stack=None, topology=0):
     if not CUDA_AVAILABLE or not x.is_cuda:
         return None
-    return RecurrentManifoldFusedFn.apply(x.contiguous(), v.contiguous(), f.contiguous(), U.contiguous(), W.contiguous(), dt, dt_scales, forget_rates, num_heads, plasticity, sing_thresh, sing_strength, mix_x, mix_v)
+    return RecurrentManifoldFusedFn.apply(x.contiguous(), v.contiguous(), f.contiguous(), U.contiguous(), W.contiguous(), dt, dt_scales, forget_rates, num_heads, plasticity, sing_thresh, sing_strength, mix_x, mix_v, W_f_stack, W_i_stack, b_f_stack, topology)

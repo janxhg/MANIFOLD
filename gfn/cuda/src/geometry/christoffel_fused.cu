@@ -30,6 +30,7 @@ __global__ void christoffel_fused_kernel(
         (x != nullptr) ? (x + b * dim) : nullptr, V_w, 
         dim, rank, 
         plasticity, sing_thresh, sing_strength, use_active,
+        nullptr, nullptr, nullptr, nullptr, // Phase 26 Clutch Placeholders
         s_h, &s_E, &s_P, &s_M
     );
 }

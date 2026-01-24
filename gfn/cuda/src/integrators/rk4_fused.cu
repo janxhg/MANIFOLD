@@ -27,7 +27,10 @@ __global__ void rk4_fused_kernel(
     float* s_gamma = s_k4 + dim;
     float* s_h = s_gamma + dim;
     
-    double* s_mem_d = (double*)(s_h + rank + (rank % 2));
+    // Align double pointer
+    size_t float_offset_bytes = (7 * dim + rank) * sizeof(float);
+    size_t align_pad = (8 - (float_offset_bytes % 8)) % 8;
+    double* s_mem_d = (double*)((char*)s_mem_f + float_offset_bytes + align_pad);
     double* s_E = s_mem_d;
     double* s_P = s_E + 1;
     float* s_M = (float*)(s_P + 1);
@@ -49,7 +52,7 @@ __global__ void rk4_fused_kernel(
         if (tid == 0 && f != nullptr) f_val_const = f[b * dim];  // Simplified
         
         // k1 = dt * (f - Γ(v, x))
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -63,7 +66,7 @@ __global__ void rk4_fused_kernel(
             s_k2[i] = s_v[i] + 0.5f * s_k1[i];
         }
         __syncthreads();
-        christoffel_device(s_k2, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_k2, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -76,7 +79,7 @@ __global__ void rk4_fused_kernel(
             s_k3[i] = s_v[i] + 0.5f * s_k2[i];
         }
         __syncthreads();
-        christoffel_device(s_k3, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_k3, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -89,7 +92,7 @@ __global__ void rk4_fused_kernel(
             s_k4[i] = s_v[i] + s_k3[i];
         }
         __syncthreads();
-        christoffel_device(s_k4, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_k4, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
@@ -120,7 +123,7 @@ extern "C" void launch_rk4_fused(
     int steps,
     cudaStream_t stream
 ) {
-    int shared = (7 * dim + rank + 16) * sizeof(float) + 2 * sizeof(double);
+    int shared = (7 * dim + rank + 16) * sizeof(float) + 2 * sizeof(double) + 16;
     rk4_fused_kernel<<<batch, BLOCK_SIZE, shared, stream>>>(
         x, v, f, U, W, x_new, v_new, dt, dt_scale, batch, dim, rank, steps
     );

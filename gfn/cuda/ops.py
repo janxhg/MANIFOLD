@@ -32,7 +32,7 @@ try:
              # (This is useful for development but fragile on Windows)
              print("[GFN CUDA] Pre-compiled extension not found, attempting JIT compilation...")
              gfn_cuda = load(
-                name='gfn_cuda_v5_0',
+                name='gfn_cuda_v2_6',
                 sources=[
                     os.path.join(cuda_dir, 'cuda_kernels.cpp'),
                     os.path.join(cuda_dir, 'src', 'geometry', 'christoffel_fused.cu'),
@@ -58,7 +58,7 @@ try:
                 extra_cflags=['/DNOMINMAX', '/DWIN32_LEAN_AND_MEAN', '/Zc:twoPhase-', '/I' + os.path.join(cuda_dir, 'include')],
                 verbose=True
              )
-             print(f"[GFN CUDA] JIT Compilation v5_0 SUCCESS.")
+             print(f"[GFN CUDA] JIT Compilation SUCCESS.")
         except Exception as e:
             print(f"[GFN CUDA] JIT Compilation FAILED: {e}")
             CUDA_AVAILABLE = False
@@ -106,7 +106,7 @@ def christoffel_fused(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0
     
     # Stability: Norm-based saturation
     norm = torch.norm(proj, dim=-1, keepdim=True)
-    scale = 1.0 / (1.0 + norm)
+    scale = 1.0 / (1.0 + norm + 1e-6)
     sq = (proj * proj) * scale
     
     gamma = torch.matmul(sq, W.t())  # [batch, dim]
@@ -134,10 +134,9 @@ def lowrank_christoffel_fused(v, U, W):
         if res is not None:
             return res
             
-    # Fallback to standard logic (simpler version of the one above)
     proj = torch.matmul(v, U)
     norm = torch.norm(proj, dim=-1, keepdim=True)
-    scale = 1.0 / (1.0 + norm)
+    scale = 1.0 / (1.0 + norm + 1e-6)
     sq = (proj * proj) * scale
     return torch.matmul(sq, W.t())
 
@@ -373,26 +372,46 @@ def dynamic_gating_fused(x, W1, b1, W2, b2):
 
 def recurrent_manifold_fused(x_state, v_state, forces, U_stack, W_stack, dt, dt_scales, forget_rates, num_heads=1,
                             plasticity=0.0, sing_thresh=1.0, sing_strength=1.0,
-                            mix_x=None, mix_v=None):
+                            mix_x=None, mix_v=None, 
+                            W_forget_stack=None, W_input_stack=None, b_forget_stack=None,
+                            topology=0):
     if not CUDA_AVAILABLE or not x_state.is_cuda: return None
+    
+    # Ensure parameter types
     if not isinstance(dt_scales, torch.Tensor):
         dt_scales = torch.tensor([float(dt_scales)]*num_heads, device=x_state.device, dtype=torch.float32)
     if not isinstance(forget_rates, torch.Tensor):
         forget_rates = torch.tensor([float(forget_rates)]*num_heads, device=x_state.device, dtype=torch.float32)
-        
+    
+    # CRITICAL: Use Autograd Wrapper if gradients are required
+    if x_state.requires_grad or U_stack.requires_grad or (W_forget_stack is not None and W_forget_stack.requires_grad):
+        from .autograd import recurrent_manifold_fused_autograd
+        return recurrent_manifold_fused_autograd(
+            x_state, v_state, forces, U_stack, W_stack, dt, dt_scales, forget_rates, num_heads,
+            plasticity, sing_thresh, sing_strength,
+            mix_x, mix_v, W_forget_stack, W_input_stack, b_forget_stack, topology
+        )
+
+    # Inference Path (Raw Kernel)
     return gfn_cuda.recurrent_manifold_fused(
         x_state.contiguous(), v_state.contiguous(), 
         forces.contiguous(), U_stack.contiguous(), W_stack.contiguous(), 
         dt, dt_scales, forget_rates, num_heads,
         plasticity, sing_thresh, sing_strength,
-        mix_x if mix_x is not None else torch.empty(0, x_state.options()),
-        mix_v if mix_v is not None else torch.empty(0, x_state.options())
+        mix_x if mix_x is not None else torch.empty(0, dtype=x_state.dtype, device=x_state.device),
+        mix_v if mix_v is not None else torch.empty(0, dtype=x_state.dtype, device=x_state.device),
+        W_forget_stack if W_forget_stack is not None else torch.empty(0, dtype=x_state.dtype, device=x_state.device),
+        W_input_stack if W_input_stack is not None else torch.empty(0, dtype=x_state.dtype, device=x_state.device),
+        b_forget_stack if b_forget_stack is not None else torch.empty(0, dtype=x_state.dtype, device=x_state.device),
+        topology
     )
 
 def recurrent_manifold_backward(grad_x_seq, grad_x_final, grad_v_final, x_final, v_final, forces, U_stack, W_stack,
                                dt, dt_scales, forget_rates, num_heads=1,
                                plasticity=0.0, sing_thresh=1.0, sing_strength=1.0,
-                               mix_x=None, mix_v=None):
+                               mix_x=None, mix_v=None, 
+                               W_forget_stack=None, W_input_stack=None, b_forget_stack=None,
+                               topology=0):
     if not CUDA_AVAILABLE or not x_final.is_cuda: return None
     if not isinstance(dt_scales, torch.Tensor):
         dt_scales = torch.tensor([float(dt_scales)]*num_heads, device=x_final.device, dtype=torch.float32)
@@ -403,6 +422,10 @@ def recurrent_manifold_backward(grad_x_seq, grad_x_final, grad_v_final, x_final,
         grad_x_seq, grad_x_final, grad_v_final, x_final, v_final, 
         forces.contiguous(), U_stack.contiguous(), W_stack.contiguous(), 
         dt, dt_scales, forget_rates, num_heads, plasticity, sing_thresh, sing_strength,
-        mix_x if mix_x is not None else torch.empty(0, x_final.options()),
-        mix_v if mix_v is not None else torch.empty(0, x_final.options())
+        mix_x if mix_x is not None else torch.empty(0, dtype=x_final.dtype, device=x_final.device),
+        mix_v if mix_v is not None else torch.empty(0, dtype=x_final.dtype, device=x_final.device),
+        W_forget_stack if W_forget_stack is not None else torch.empty(0, dtype=x_final.dtype, device=x_final.device),
+        W_input_stack if W_input_stack is not None else torch.empty(0, dtype=x_final.dtype, device=x_final.device),
+        b_forget_stack if b_forget_stack is not None else torch.empty(0, dtype=x_final.dtype, device=x_final.device),
+        topology
     )

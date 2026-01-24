@@ -42,7 +42,7 @@ __global__ void euler_fused_kernel(
     const float eff_dt = dt * dt_scale;
 
     for (int s = 0; s < steps; s++) {
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
         __syncthreads();
 
         for (int i = tid; i < dim; i += blockDim.x) {
