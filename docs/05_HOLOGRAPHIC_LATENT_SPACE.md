@@ -57,6 +57,7 @@ We trained a Hyper-Torus network with Holographic Readout on 100,000 steps of pa
 Because there is no projection layer, we can plot the raw latent dimensions directly.
 *   **Result:** The trajectory of the 128-dimensional hidden state forms a perfect limit cycle on a 2D projection.
 *   **Interpretation:** The model didn't just learn to *predict* parity; it learned to *be* a parity counter. It constructed a physical pendulum inside its high-dimensional brain.
+*   **Note on Latent Regularization:** To ensure precise limit cycles, orthogonal latent dimensions (noise channels 1-127) are typically dampened via spectral regularization, focusing kinetic energy into the primary parity channel for maximum signal-to-noise ratio.
 
 This makes debugging trivial. If the model fails, we don't check weights; we check the trajectory. "Did it lose momentum? Did it hit a friction patch?" We debug the physics, not the algebra.
 

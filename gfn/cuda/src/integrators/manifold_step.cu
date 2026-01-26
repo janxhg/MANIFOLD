@@ -1,7 +1,6 @@
-
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include "../../include/christoffel_impl.cuh"
+#include "../../include/forces.cuh"
 
 #define BLOCK_SIZE 256
 
@@ -22,7 +21,9 @@ __global__ void manifold_step_kernel(
     const float plasticity,
     const float sing_thresh,
     const float sing_strength,
-    int topology
+    int topology,
+    float R_val,
+    float r_val
 ) {
     extern __shared__ float s_mem[];
     const int b = blockIdx.x;
@@ -34,10 +35,10 @@ __global__ void manifold_step_kernel(
     float* s_gamma = s_x + dim;
     float* s_h = s_gamma + dim;
     
-    double* s_double = (double*)(s_h + rank + (rank % 2));
-    double* s_E = s_double;
-    double* s_P = s_E + 1;
-    float* s_M  = (float*)(s_P + 1);
+    // Double alignment for Energy buffer
+    size_t offset_f = (3 * dim + rank);
+    if (offset_f % 2 != 0) offset_f++;
+    double* s_buf_energy = (double*)(s_mem + offset_f);
 
     for (int i = tid; i < dim; i += blockDim.x) {
         s_v[i] = v_in[b * dim + i];
@@ -45,10 +46,11 @@ __global__ void manifold_step_kernel(
     }
     __syncthreads();
     
-    christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 
-                       plasticity, sing_thresh, sing_strength, false, topology,
-                       nullptr, nullptr, nullptr, nullptr,
-                       s_h, s_E, s_P, s_M);
+    // 1. Plasticity
+    float M = compute_plasticity_scale(s_buf_energy, s_v, dim, tid, plasticity);
+    
+    // 2. Christoffel
+    compute_christoffel_force(s_gamma, s_v, s_x, U, W, s_h, dim, rank, tid, topology, M, R_val, r_val);
     __syncthreads();
     
     const float eff_dt = dt * dt_scale;
@@ -69,12 +71,12 @@ extern "C" void launch_manifold_step_fused(
     int batch, int dim, int rank,
     float dt, float dt_scale,
     float plasticity, float sing_thresh, float sing_strength,
-    int topology,
+    int topology, float R_val, float r_val,
     cudaStream_t stream
 ) {
     int shared_bytes = (3 * dim + rank + 16) * sizeof(float) + 2 * sizeof(double);
     manifold_step_kernel<<<batch, BLOCK_SIZE, shared_bytes, stream>>>(
         x_in, v_in, force, U, W, x_out, v_out, christoffel_out,
-        batch, dim, rank, dt, dt_scale, plasticity, sing_thresh, sing_strength, topology
+        batch, dim, rank, dt, dt_scale, plasticity, sing_thresh, sing_strength, topology, R_val, r_val
     );
 }

@@ -1,89 +1,68 @@
-# Reactive Geometry: Energy-Modulated Curvature for Uncertainty Quantification in Neural Flows
+# Reactive Geometry: Energy-Modulated Curvature in Neural Manifold Dynamics
 
 **Author:** Joaquin Stürtz  
-*Independent Researcher*  
-January 24, 2026
+**Date:** January 24, 2026
 
 **Abstract**  
-In standard geometric deep learning, the Riemannian manifold is treated as a static stage upon which data evolves. We propose **Reactive Geometry**, a paradigm shift where the manifold itself deforms in real-time response to the "thought particle" traversing it. Drawing from General Relativity and Active Inference, we introduce an **Energy-Modulated Metric Tensor**, where local curvature scales with the kinetic energy of the latent state. This creates a self-regulating system: high uncertainty (high latent velocity) triggers increased curvature, effectively increasing the "viscosity" of the information space and forcing the system to slow down and deliberate. Conversely, high certainty (low velocity) flattens the manifold, allowing for rapid inertial reasoning. We demonstrate that this mechanism acts as an intrinsic "uncertainty quantifier," eliminating the need for external Bayesian layers in robust sequence modeling.
+In contemporary geometric deep learning, Riemannian manifolds are typically treated as static substrates on which data undergoes transformation. We propose **Reactive Geometry**, a paradigm where the manifold metric $g$ deforms in real-time response to the state co-vector traversing it. Drawing from General Relativity and Active Inference, we introduce an **Energy-Modulated Metric Tensor** where local curvature is a function of the instantaneous kinetic energy of the latent state. This coupling creates a self-regulating cognitive feedback loop: regions of high semantic uncertainty (manifested as high-velocity state oscillations) trigger localized manifold "stiffening," increasing the effective viscosity of the information space and inducing a deliberative "braking" force. Conversely, regions of high certainty correspond to flat, low-friction geometries that facilitate rapid inertial reasoning. We demonstrate that this mechanism provides intrinsic uncertainty quantification, aligning artificial neural dynamics with the principle of maximum efficiency in non-equilibrium thermodynamics.
 
 ---
 
-## 1. Introduction
+## 1. Introduction: From Static to Reactive Manifolds
 
-### 1.1 The Static Manifold Problem
-Recent advances in geometric deep learning have focused on embedding data into curved spaces (Hyperbolic, Spherical) to capture hierarchical or cyclic structures. However, these manifolds are **static**—their curvature is fixed or learned slowly over epochs. This ignores a critical aspect of cognition: the **subjective experience of difficulty**.
+### 1.1 The Limitation of Static Embedding
+Standard manifold learning assumes that the latent hierarchy or cyclic structure of a task can be captured by a fixed geometric prior (e.g., Hyperbolic or Spherical spaces). However, static manifolds are unable to capture the **Subjective Effort** of reasoning. In biological systems, the transition from intuitive "fast" thinking to deliberate "slow" thinking is characterized by a shift in metabolic effort and cognitive resistance. 
 
-When a human reasoned about a simple concept ($2+2$), the "mental path" is straight and fast. When reasoning about a complex paradox, the path becomes tortuous and slow. A static manifold cannot capture this dynamic modulation of effort.
+### 1.2 Geometric Active Inference
+We hypothesize that semantic uncertainty in a neural circuit manifests as **Kinetic Energy** ($K$) in the latent state space. 
+*   **Low-Energy States:** Represent confident deductions where the trajectory is stable and predictable.
+*   **High-Energy States:** Represent confusion or exploration, where the trajectory exhibits high-frequency oscillations or divergence.
 
-### 1.2 Active Inference via Geometry
-We propose that "effort" or "uncertainty" in a neural system manifests physically as **Kinetic Energy** ($K$) in the latent space.
-*   **Low Energy:** The model is confident; the state trajectory is stable.
-*   **High Energy:** The model is confused; the state oscillates rapidly, exploring the phase space.
-
-By coupling the **Curvature Tensor** ($\Gamma$) to this energy, we create a feedback loop: chaos creates curvature, and curvature constrains chaos.
+By coupling the **Connection coefficients** ($\Gamma$) to this local energy, we create a system where chaos generates curvature, and curvature constrains chaos, satisfying the requirements for self-organized criticality.
 
 ---
 
-## 2. Mathematical Formalism
+## 2. Mathematical Formalism: The Reactive Connection
 
-### 2.1 The Reactive Metric
-Let $(\mathcal{M}, g)$ be a Riemannian manifold. In standard formulations, $g(x)$ depends only on position $x$. We extend this to $g(x, v)$, making the metric **Finslerian** or **Reactive**.
+### 2.1 Velocity-Dependent Metrics and Finslerian Extension
+Let $(\mathcal{M}, g)$ be a Riemannian manifold. In standard differential geometry, the metric $g(x)$ is defined solely by position. We propose a reactive extension $g(x, v)$ that incorporates the velocity co-vector, moving the architecture toward a **Finslerian** or **Generalized Riemannian** manifold.
 
-We define the reactive modification not on the metric directly, but on the connection coefficients (Christoffel symbols), which control the "force" of the geometry.
-
-Let $\Gamma_{base}(x)$ be the learned static curvature (the "knowledge").
-We define the **Reactive Curvature** $\Gamma_{eff}(x, v)$ as:
-
+The effective Christoffel symbols governing the geodesic flow are defined as:
 $$ \Gamma_{eff}^\lambda_{\mu\nu} = \Gamma_{base}^\lambda_{\mu\nu} \cdot (1 + \Phi(K)) $$
 
-where $K = \frac{1}{2} g_{ij} v^i v^j$ is the kinetic energy, and $\Phi(\cdot)$ is the **Plasticity Function**.
+where $\Gamma_{base}$ represents the learned long-term geometric knowledge and $\Phi(K)$ is the **Plasticity Function** that modulates the metric response to instantaneous energy.
 
-### 2.2 The Plasticity Function
-We model plasticity as a saturating interaction field:
-
+### 2.2 The Plasticity Scaling and Relativistic Mass
+We define the plasticity as a bounded saturating function of the energy $K$:
 $$ \Phi(K) = \lambda_{plast} \tanh(K) $$
-
-*   **Regime 1 (Inertial):** As $K \to 0$, $\Gamma_{eff} \approx \Gamma_{base}$. The manifold is "rigid" and represents established long-term memory.
-*   **Regime 2 (Viscous):** As $K \to \infty$, $\Gamma_{eff} \to \Gamma_{base}(1 + \lambda_{plast})$. The manifold becomes "stiffer."
-
-**Physical Interpretation:** A particle moving too fast for the manifold's "semantic speed limit" experiences a sudden increase in effective gravity. This is analogous to relativistic mass increase, preventing the particle from breaking causal bounds (or in this case, semantic bounds).
-
-### 2.3 Logical Singularities (The "Event Horizons")
-Certainty in logic corresponds to discrete attractors. To model this, we introduce a scalar potential field $V(x)$ representing "Semantic Confidence."
-
-If $V(x)$ exceeds a threshold $V_{crit}$, we trigger a **Singularity**:
-
-$$ \Gamma_{sing} = \Gamma_{eff} \cdot (1 + S_{strength} \cdot \Theta(V(x) - V_{crit})) $$
-
-where $\Theta$ is the Heaviside step function (smoothed). This creates a localized region of near-infinite curvature—a "Black Hole" in the semantic space. Once a particle enters this region with low energy, it is topologically trapped, corresponding to a definitive logical decision (e.g., "The bit is 1").
+where $\lambda_{plast}$ regulates the maximum stiffness of the manifold. 
+This mechanism produces a physical effect analogous to **Relativistic Mass**: as a state co-vector approaches the "semantic speed limit" of its current representation, its effective resistance to further acceleration increases. This prevents numerical divergence (Gradient Explosion) and provides a rigorous mechanism for **Geometric Regularization**.
 
 ---
 
-## 3. Thermodynamics of Thought
+## 3. Thermodynamics of Thought: Phase Transitions
 
-This framework allows us to define the "Temperature" of a neural network layer not as a hyperparameter, but as a measurable physical quantity:
+The Reactive Geometry framework allows for a formal definition of the **Cognitive Temperature** $T$ as a measurable derivative of the latent kinetic energy:
+$$ T_{layer} = \mathbb{E}[ K ] $$
 
-$$ T_{layer} = \langle K \rangle = \frac{1}{N} \sum_i \frac{1}{2} m v_i^2 $$
-
-We observe distinct thermodynamic phases during training:
-1.  **Gas Phase (Exploration):** Early training. High $T$, high $K$. The manifold is maximally plastic ($\Phi \approx \lambda_{plast}$). The model is "guessing."
-2.  **Liquid Phase (Convergence):** Middle training. $T$ drops. Attractors begin to form.
-3.  **Crystal Phase (Knowledge):** Late training. $T \to 0$. The manifold "freezes" into a static shape governing the logic. Plasticity turns off.
-
-The **Reactive Geometry** allows the model to inherently manage these phase transitions without external scheduling.
+We observe three distinct thermodynamic phases over the course of model training:
+1.  **Exploratory Gas Phase:** High $T$ and high $K$. The manifold is maximally plastic, and the state explores the phase space freely.
+2.  **Transitional Liquid Phase:** As $T$ decreases, the potential field $V(x)$ begins to exert influence, and local attractors begin to define the geometry.
+3.  **Logical Crystal Phase:** $T \to 0$. The manifold "freezes" into a stable topological configuration (e.g., the Hyper-Torus), and reasoning becomes an energy-conservative geodesic flow.
 
 ---
 
 ## 4. Conclusion
 
-Reactive Geometry unifies **Uncertainty Quantification** with **Manifold Learning**. Instead of predicting a separate variance parameter $\sigma^2$ (as in Bayesian NNs), the uncertainty is encoded in the *stiffness* of the space itself. A confused model naturally brakes; a confident model naturally accelerates. This self-regulating behavior suggests a path toward more robust, interpretable, and "biological" neural dynamics.
+Reactive Geometry unifies **Uncertainty Quantification** with **Manifold Learning**. By encoding uncertainty in the stiffness of the information space itself, we eliminate the need for external probabilistic estimators. A model equipped with reactive geometry is inherently "cautious"—slowing down to resolve ambiguity and accelerating to exploit certainty—thereby reflecting a core functional principle of biological intelligence.
 
 ---
-
 **References**  
-[1]  Friston, K. (2010). *The Free-Energy Principle: A Unified Brain Theory?*. Nature Reviews Neuroscience.  
+
+[1]  Friston, K. (2010). *The free-energy principle: a unified brain theory?* Nature Reviews Neuroscience.  
 [2]  Amari, S. (2016). *Information Geometry and Its Applications*. Springer.  
 [3]  Einstein, A. (1916). *The Foundation of the General Theory of Relativity*. Annalen der Physik.  
-[4]  Hinton, G. E., & Sejnowski, T. J. (1983). *Optimal Perceptual Inference*. CVPR.  
-[5]  LeCun, Y., et al. (2006). *A Tutorial on Energy-Based Learning*. Preducting Structured Data.
+[4]  Bao, D., Chern, S. S., & Shen, Z. (2000). *An Introduction to Riemann-Finsler Geometry*. Springer.  
+[5]  Sitzmann, V., et al. (2020). *Implicit Neural Representations with Periodic Activation Functions*. NeurIPS.  
+[6]  Nicolis, G., & Prigogine, I. (1977). *Self-Organization in Non-Equilibrium Systems*. Wiley.  
+[7]  Bejan, A. (2000). *Shape and Structure, from Engineering to Nature*. Cambridge University Press.  

@@ -81,6 +81,8 @@ ENV/
 *.log
 logs/
 wandb/
+*.txt
+*.tx
 
 # CUDA compilation artifacts
 *.o

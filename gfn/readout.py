@@ -14,13 +14,17 @@ class ImplicitReadout(nn.Module):
         temp_init: Initial temperature (high = smooth gradients)
         temp_final: Final temperature (low = sharp outputs)
     """
-    def __init__(self, dim, coord_dim, temp_init=1.0, temp_final=0.2):
+    def __init__(self, dim, coord_dim, temp_init=1.0, temp_final=0.2, topology=0):
         super().__init__()
+        
+        self.topology = topology
+        self.is_torus = (topology == 1)
         
         # MLP to output coordinates
         # TOROIDAL EMBEDDING: Input is doubled (Sin/Cos)
+        in_dim = dim * 2 if self.is_torus else dim
         self.mlp = nn.Sequential(
-            nn.Linear(dim * 2, dim), 
+            nn.Linear(in_dim, dim), 
             nn.GELU(),
             nn.Linear(dim, coord_dim)
         )
@@ -45,9 +49,12 @@ class ImplicitReadout(nn.Module):
         Returns:
             bits_soft: [batch, seq, coord_dim] in range [0, 1]
         """
-        # LEVEL 16: TOROIDAL EMBEDDING
-        # Map x -> [sin(x), cos(x)] to enforce periodicity
-        x_emb = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
+        if self.is_torus:
+            # LEVEL 16: TOROIDAL EMBEDDING
+            # Map x -> [sin(x), cos(x)] to enforce periodicity
+            x_emb = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
+        else:
+            x_emb = x
         
         # LEVEL 20: SIGNAL BOOST
         # 10.0 constant gain provides sharp gradients for BCE convergence.

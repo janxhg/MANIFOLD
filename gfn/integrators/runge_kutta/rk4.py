@@ -28,7 +28,13 @@ class RK4Integrator(nn.Module):
                 U = getattr(self.christoffel, 'U', None)
                 W = getattr(self.christoffel, 'W', None)
                 if U is not None and W is not None:
-                    return rk4_fused(x, v, force, U, W, self.dt, dt_scale, steps=steps)
+                    topology = getattr(self.christoffel, 'topology_id', 0)
+                    if hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus: topology = 1
+                    
+                    R = getattr(self.christoffel, 'R', 2.0)
+                    r = getattr(self.christoffel, 'r', 1.0)
+
+                    return rk4_fused(x, v, force, U, W, self.dt, dt_scale, steps=steps, topology=topology, R=R, r=r)
             except Exception:
                 pass
 
@@ -37,7 +43,7 @@ class RK4Integrator(nn.Module):
             dt = self.dt * dt_scale
             
             def dynamics(current_x, current_v):
-                acc = -self.christoffel(current_v, current_x)
+                acc = -self.christoffel(current_v, current_x, force=force, **kwargs)
                 if force is not None:
                     acc = acc + force
                 return acc

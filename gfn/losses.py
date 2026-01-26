@@ -17,8 +17,8 @@ def hamiltonian_loss(velocities: list, states: list = None, metric_fn=None, lamb
     If 'metric_fn' is provided, computes Energy = 0.5 * v^T g(x) v.
     Otherwise fallbacks to Euclidean Energy = 0.5 * ||v||^2.
     """
-    if len(velocities) < 2:
-        return torch.tensor(0.0, device=velocities[0].device)
+    if lambda_h == 0.0 or not velocities or len(velocities) < 2:
+        return torch.tensor(0.0, device=velocities[0].device if (velocities and len(velocities) > 0) else 'cpu')
     
     energies = []
     for i in range(len(velocities)):
@@ -190,7 +190,7 @@ class GFNLoss(nn.Module):
         
         # Hamiltonian regularization
         if velocities and len(velocities) > 1:
-            h_loss = hamiltonian_loss(velocities, self.lambda_h)
+            h_loss = hamiltonian_loss(velocities, lambda_h=self.lambda_h)
             total = total + h_loss
             loss_dict["hamiltonian"] = h_loss.item()
         

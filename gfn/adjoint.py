@@ -52,8 +52,8 @@ class GeodesicODEFunc(nn.Module):
         # dx/dt = v
         dx_dt = v
         
-        # dv/dt = f - Γ(v, v)
-        dv_dt = f - self.christoffel(v)
+        # dv/dt = f - Γ(v, x)
+        dv_dt = f - self.christoffel(v, x)
         
         # df/dt = 0
         df_dt = torch.zeros_like(f)

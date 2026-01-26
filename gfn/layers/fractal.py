@@ -59,10 +59,10 @@ class FractalMLayer(nn.Module):
         stacked_gamma = torch.stack(christoffels, dim=1) # [batch, heads, head_dim]
         curvature_r = torch.norm(stacked_gamma, dim=-1).mean(dim=-1, keepdim=True) # [batch, 1]
         
-        # 3. Tunneling condition (Smooth sigmoid gate)
-        # alpha is 0 if curvature is low (flat), rises to 1 when r > threshold
-        # GRADIENT FIX: Increase baseline to 0.3 for stronger micro_manifold signal
-        tunnel_gate = 0.3 + 0.7 * torch.sigmoid((curvature_r - self.threshold) * 5.0)
+        # tunnel_gate = 0.3 + 0.7 * torch.sigmoid((curvature_r - self.threshold) * 5.0)
+        # LEVEL 42: SURGICAL NOISE REMOVAL
+        # Removing the 0.3 bias ensures that flat regions (R=0) don't inject micro-manifold noise.
+        tunnel_gate = torch.sigmoid((curvature_r - self.threshold) * 10.0) 
         
         # 4. Micro-evolution (Zooming in)
         # We use the macro-updated state as input to the sub-manifold

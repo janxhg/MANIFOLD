@@ -23,6 +23,9 @@ class ToroidalChristoffel(nn.Module):
         self.R = self.config.get('topology', {}).get('major_radius', 2.0)
         self.r = self.config.get('topology', {}).get('minor_radius', 1.0)
         
+        self.topology_id = 1
+        self.is_torus = True
+        
         # Friction Gates (The Clutch)
         # Input to gates: [batch, 2*dim] (sin(x), cos(x))
         gate_input_dim = 2 * dim
@@ -30,7 +33,7 @@ class ToroidalChristoffel(nn.Module):
         # State component of friction gate
         self.forget_gate = nn.Linear(gate_input_dim, dim)
         nn.init.normal_(self.forget_gate.weight, std=0.01)
-        nn.init.constant_(self.forget_gate.bias, 0.0) 
+        nn.init.constant_(self.forget_gate.bias, -5.0) # Release the clutch (Low friction start) 
         
         # Force component of friction gate
         self.input_gate = nn.Linear(dim, dim, bias=False)
@@ -95,18 +98,17 @@ class ToroidalChristoffel(nn.Module):
         
         for i in range(0, self.dim - 1, 2):
             th = x[..., i]
-            ph = x[..., i+1]
             v_th = v[..., i]
             v_ph = v[..., i+1]
             
-            # Gamma^th_{ph, ph}
-            # Gamma_th = Gamma^th_ph_ph * v_ph^2
-            term_th = (self.R + self.r * torch.cos(th)) * torch.sin(th) / self.r
+            denom = self.R + self.r * torch.cos(th)
+            # Differentiable safety clamp
+            denom_safe = torch.clamp(denom, min=1e-6)
+
+            term_th = denom * torch.sin(th) / self.r
             gamma[..., i] = term_th * (v_ph ** 2)
             
-            # Gamma^ph_{ph, th}
-            # Gamma_ph = 2 * Gamma^ph_ph_th * v_ph * v_th
-            term_ph = -(self.r * torch.sin(th)) / (self.R + self.r * torch.cos(th))
+            term_ph = -(self.r * torch.sin(th)) / denom_safe
             gamma[..., i+1] = 2.0 * term_ph * v_ph * v_th
             
         gamma = gamma * 0.05 # Strong Curvature (User Requested Full Torus)
@@ -119,11 +121,11 @@ class ToroidalChristoffel(nn.Module):
         gate_activ = self.forget_gate(x_in)
         
         if force is not None:
-            gate_activ = gate_activ + self.input_gate(force)
+             gate_activ = gate_activ + self.input_gate(force)
             
         # Level 34: BRAKING POWER (STIFFNESS)
         # Higher mu to stop v=~15 in one step at dt=0.2
-        mu = torch.sigmoid(gate_activ) * 10.0
+        mu = torch.sigmoid(gate_activ) * 5.0
         
         # ACTIVE INFERENCE LOGIC (Triad v2.0)
         if self.active_cfg.get('enabled', False):

@@ -8,6 +8,7 @@ Tests if CUDA kernels are actually being used.
 import torch
 import sys
 from pathlib import Path
+import subprocess
 
 # Add project root
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -33,33 +34,18 @@ except Exception as e:
     print(f"  ✗ FAILED: {e}")
     sys.exit(1)
 
-# Test 3: Test recurrent_manifold_fused kernel
-if CUDA_AVAILABLE and torch.cuda.is_available():
-    print("\n[3/5] Testing recurrent_manifold_fused kernel...")
+def run_kernel_smoke():
+    cmd = [sys.executable, str(PROJECT_ROOT / "tests" / "test_fusion_kernel.py")]
     try:
-        batch, seq, dim, rank, heads = 2, 10, 64, 16, 2
-        x = torch.randn(batch, dim).cuda()
-        v = torch.randn(batch, dim).cuda()
-        forces = torch.randn(batch, seq, dim).cuda()
-        U = torch.randn(heads * 2, dim, rank).cuda()  # 2 layers * heads
-        W = torch.randn(heads * 2, dim, rank).cuda()
-        
-        result = recurrent_manifold_fused(
-            x, v, forces, U, W,
-            dt=0.1, dt_scale=1.0, num_heads=heads,
-            plasticity=0.0, sing_thresh=1.0, sing_strength=1.0
-        )
-        
-        if result is not None:
-            x_out, v_out, x_seq, reg_loss = result
-            print(f"  ✓ Kernel SUCCESS")
-            print(f"    Output shapes: x={x_out.shape}, v={v_out.shape}, x_seq={x_seq.shape}")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        print(result.stdout.strip().splitlines()[-1] if result.stdout else "")
+        if result.returncode == 0:
+            print("  ✓ Kernel smoke test executed in isolated process")
         else:
-            print(f"  ✗ Kernel returned None")
+            print("  ✗ Kernel smoke test failed")
+            print(result.stderr)
     except Exception as e:
-        print(f"  ✗ Kernel FAILED: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"  ✗ Kernel smoke test error: {e}")
 
 # Test 4: Import Model
 print("\n[4/5] Importing Manifold model...")
@@ -90,10 +76,17 @@ try:
     model.eval()  # CRITICAL: Set to eval mode to use non-autograd path
     print(f"  Running forward pass (collect_christ=False to enable CUDA)...")
     with torch.no_grad():
-        logits, (x_f, v_f), christ = model(inputs, collect_christ=False)
+        outputs = model(inputs, collect_christ=False)
+        logits = outputs[0]
+        state = outputs[1] if len(outputs) > 1 else None
+        x_f, v_f = state if state is not None else (None, None)
     
     print(f"  ✓ Forward pass SUCCESS")
     print(f"    Output logits shape: {logits.shape}")
+    
+    if CUDA_AVAILABLE and torch.cuda.is_available():
+        print("\n[EXTRA] Running isolated kernel smoke test...")
+        run_kernel_smoke()
     
 except Exception as e:
     print(f"  ✗ Forward pass FAILED: {e}")

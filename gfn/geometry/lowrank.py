@@ -85,7 +85,19 @@ class LowRankChristoffel(nn.Module):
                 
                 # Apply friction manually if CUDA kernel doesn't support it yet
                 if x is not None:
-                     friction = torch.sigmoid(self.forget_gate(x))
+                     # Handle Torus geometry for gate input
+                     if self.is_torus:
+                         x_in = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
+                     else:
+                         x_in = x
+
+                     friction = torch.sigmoid(self.forget_gate(x_in)) * 5.0
+                     
+                     # If requested, return separately (for implicit integration)
+                     if getattr(self, 'return_friction_separately', False):
+                         # gamma_cuda is already clamped by kernel (20.0 tanh)
+                         return gamma_cuda, friction
+                         
                      gamma_cuda = gamma_cuda + friction * v
                 return torch.clamp(gamma_cuda, -self.clamp_val, self.clamp_val)
         except Exception:
@@ -95,13 +107,13 @@ class LowRankChristoffel(nn.Module):
         if v.dim() == 3 and self.U.dim() == 3:
             proj = torch.bmm(v, self.U) 
             norm = torch.norm(proj, dim=-1, keepdim=True)
-            scale = 1.0 / (1.0 + norm)
+            scale = 1.0 / (1.0 + norm + 1e-6)
             sq = (proj * proj) * scale 
             gamma = torch.bmm(sq, self.W.transpose(1, 2)) 
         else:
             proj = torch.matmul(v, self.U)
             norm = torch.norm(proj, dim=-1, keepdim=True)
-            scale = 1.0 / (1.0 + norm)
+            scale = 1.0 / (1.0 + norm + 1e-6)
             sq = (proj * proj) * scale
             gamma = torch.matmul(sq, self.W.t())
             
@@ -114,11 +126,24 @@ class LowRankChristoffel(nn.Module):
                  x_in = x
                  
             # Base friction from state
-            gate_activ = self.forget_gate(x_in)
+            Wf = kwargs.get('W_forget_stack', None)
+            Wi = kwargs.get('W_input_stack', None)
+            bf = kwargs.get('b_forget_stack', None)
             
-            # Input-dependent modulation
-            if force is not None:
-                gate_activ = gate_activ + self.input_gate(force)
+            if Wf is not None and bf is not None:
+                # Prioritize External Weights (The Clutch)
+                if Wf.dim() == 3: Wf = Wf[0] # Handle Depth head
+                if Wi is not None and Wi.dim() == 3: Wi = Wi[0]
+                if bf.dim() == 2: bf = bf[0]
+                
+                gate_activ = torch.matmul(x_in, Wf.t()) + bf
+                if Wi is not None and force is not None:
+                     gate_activ = gate_activ + torch.matmul(force, Wi.t())
+            else:
+                # Use internal weights
+                gate_activ = self.forget_gate(x_in)
+                if force is not None:
+                    gate_activ = gate_activ + self.input_gate(force)
                 
             # LEVEL 25: FRICTION GAIN (Aristotelian Override)
             # STABILITY FIX: Gain 5.0 is sufficient and more stable
@@ -126,8 +151,12 @@ class LowRankChristoffel(nn.Module):
             
             # If we want to return BOTH for implicit integration
             if getattr(self, 'return_friction_separately', False):
+                 # Match CUDA v5.1 Soft Clamping
+                 gamma = 20.0 * torch.tanh(gamma / 20.0)
                  return gamma, mu
                  
             gamma = gamma + mu * v
             
-        return gamma
+        # Match CUDA Kernel Soft Clamping (v5.1)
+        # force_out = 20.0f * tanhf(res / 20.0f)
+        return 20.0 * torch.tanh(gamma / 20.0)

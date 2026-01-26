@@ -30,7 +30,10 @@ print(f"Model in training mode: {model.training}")
 inputs = torch.randint(0, 10, (2, 5)).to(device)
 
 print("\nForward pass with gradients...")
-logits, (x_f, v_f), christ = model(inputs, collect_christ=False)
+outputs = model(inputs, collect_christ=False)
+logits = outputs[0]
+state = outputs[1] if len(outputs) > 1 else None
+x_f, v_f = state if state is not None else (None, None)
 
 print(f"\n✓ Forward pass completed")
 print(f"Output logits shape: {logits.shape}")

@@ -45,7 +45,6 @@ __global__ void lowrank_christoffel_forward_kernel(
         dim, rank, 
         0.0f, 1.0f, 1.0f, false, 
         0, // topology=0 (Euclidean)
-        nullptr, nullptr, nullptr, nullptr, // Clutch Placeholders
         s_h, &s_E, &s_P, &s_M
     );
     __syncthreads();
@@ -54,9 +53,10 @@ __global__ void lowrank_christoffel_forward_kernel(
     if (use_x && x != nullptr) {
         const int tid = threadIdx.x;
         for (int i = tid; i < dim; i += blockDim.x) {
-            float xi = x[b * dim + i];
-            float vi = v[b * dim + i];
-            float gi = gamma[b * dim + i];
+            // Unused variables removed for clean build
+            // float xi = x[b * dim + i];
+            // float vi = v[b * dim + i];
+            // float gi = gamma[b * dim + i];
 
             // 1. Dynamic Curvature Modulation (if V exists, otherwise 1.0)
             // 2. Adaptive Gating

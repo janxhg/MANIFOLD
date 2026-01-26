@@ -16,7 +16,9 @@ __global__ void reactive_christoffel_forward_kernel(
     float plasticity,
     float sing_thresh,
     float sing_strength,
-    int topology
+    int topology,
+    float R_val,
+    float r_val
 ) {
     __shared__ float s_h[MAX_RANK];
     __shared__ double s_E;
@@ -32,8 +34,8 @@ __global__ void reactive_christoffel_forward_kernel(
         dim, rank, 
         plasticity, sing_thresh, sing_strength, true, 
         topology,
-        nullptr, nullptr, nullptr, nullptr, 
-        s_h, &s_E, &s_P, &s_M
+        s_h, &s_E, &s_P, &s_M,
+        R_val, r_val
     );
 }
 
@@ -43,10 +45,11 @@ extern "C" void launch_reactive_christoffel_forward(
     int batch, int dim, int rank,
     float plasticity, float sing_thresh, float sing_strength,
     int topology,
+    float R_val, float r_val,
     cudaStream_t stream
 ) {
     reactive_christoffel_forward_kernel<<<batch, BLOCK_SIZE, 0, stream>>>(
-        v, U, W, gamma, x, V_w, batch, dim, rank, plasticity, sing_thresh, sing_strength, topology
+        v, U, W, gamma, x, V_w, batch, dim, rank, plasticity, sing_thresh, sing_strength, topology, R_val, r_val
     );
 }
 
@@ -68,7 +71,9 @@ __global__ void reactive_christoffel_backward_kernel(
     float plasticity,
     float sing_thresh,
     float sing_strength,
-    int topology
+    int topology,
+    float R_val,
+    float r_val
 ) {
     // For simplicity, we reuse the robust logic from christoffel_backward_kernel
     // in christoffel_fused.cu which already handles everything.
@@ -83,6 +88,7 @@ extern "C" void launch_reactive_christoffel_backward(
     int batch, int dim, int rank,
     float plasticity, float sing_thresh, float sing_strength,
     int topology,
+    float R_val, float r_val,
     cudaStream_t stream
 ) {
     // Forward to launch_christoffel_backward but with use_active=true
@@ -93,11 +99,11 @@ extern "C" void launch_reactive_christoffel_backward(
         float*, float*,
         int, int, int,
         float, float, float,
-        bool, int, cudaStream_t
+        bool, int, float, float, cudaStream_t
     );
     
     launch_christoffel_backward(
         grad_gamma, v, U, W, x, V_w, grad_v, grad_U, grad_W, grad_x, grad_V_w,
-        batch, dim, rank, plasticity, sing_thresh, sing_strength, true, topology, stream
+        batch, dim, rank, plasticity, sing_thresh, sing_strength, true, topology, R_val, r_val, stream
     );
 }

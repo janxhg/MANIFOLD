@@ -28,7 +28,9 @@ __global__ void omelyan_fused_kernel(
     float sing_strength,
     bool use_active,
     const int steps,
-    int topology
+    int topology,
+    float R_val,
+    float r_val
 ) {
     extern __shared__ float s_mem_f[];
     float* s_x = s_mem_f;
@@ -58,7 +60,7 @@ __global__ void omelyan_fused_kernel(
         // Step 1
         for (int i = tid; i < dim; i += blockDim.x) s_x[i] += OM_XI * h * s_v[i];
         __syncthreads();
-        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, topology, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, topology, s_h, s_E, s_P, s_M, R_val, r_val);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
              float f_v = (f) ? f[b * dim + i] : 0.0f;
@@ -69,7 +71,7 @@ __global__ void omelyan_fused_kernel(
         // Step 2
         for (int i = tid; i < dim; i += blockDim.x) s_x[i] += OM_CHI * h * s_v[i];
         __syncthreads();
-        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, topology, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, topology, s_h, s_E, s_P, s_M, R_val, r_val);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
              float f_v = (f) ? f[b * dim + i] : 0.0f;
@@ -80,7 +82,7 @@ __global__ void omelyan_fused_kernel(
         // Step 3 (Center)
         for (int i = tid; i < dim; i += blockDim.x) s_x[i] += (1.0f - 2.0f * (OM_CHI + OM_XI)) * h * s_v[i];
         __syncthreads();
-        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, topology, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
+        christoffel_device(s_v, U, W, s_gamma, s_x, V_w, dim, rank, plasticity, sing_thresh, sing_strength, use_active, topology, s_h, s_E, s_P, s_M, R_val, r_val);
         __syncthreads();
         for (int i = tid; i < dim; i += blockDim.x) {
              float f_v = (f) ? f[b * dim + i] : 0.0f;
@@ -111,12 +113,12 @@ extern "C" void launch_omelyan_fused(
     int batch, int dim, int rank,
     float plasticity, float sing_thresh, float sing_strength,
     bool use_active,
-    int steps, int topology,
+    int steps, int topology, float R_val, float r_val,
     cudaStream_t stream
 ) {
     int shared = (3 * dim + rank + 16) * sizeof(float) + 2 * sizeof(double);
     omelyan_fused_kernel<<<batch, BLOCK_SIZE, shared, stream>>>(
         x, v, f, U, W, V_w, x_new, v_new, dt, dt_scale_scalar, dt_scale_tensor,
-        batch, dim, rank, plasticity, sing_thresh, sing_strength, use_active, steps, topology
+        batch, dim, rank, plasticity, sing_thresh, sing_strength, use_active, steps, topology, R_val, r_val
     );
 }

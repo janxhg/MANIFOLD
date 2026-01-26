@@ -40,12 +40,14 @@ class TestManifoldComponents(unittest.TestCase):
         force = torch.randn(4, dim).to(self.device)
         
         # Test 1: With Force
-        res_u, res_v = layer(start_u, start_v, force)
+        res = layer(start_u, start_v, force)
+        res_u, res_v = res[0], res[1]
         self.assertEqual(res_u.shape, start_u.shape)
         self.assertEqual(res_v.shape, start_v.shape)
         
         # Test 2: Without Force
-        res_u, res_v = layer(start_u, start_v)
+        res = layer(start_u, start_v)
+        res_u, res_v = res[0], res[1]
         self.assertEqual(res_u.shape, start_u.shape)
 
     def test_model_forward(self):
@@ -58,7 +60,8 @@ class TestManifoldComponents(unittest.TestCase):
         seq = 5
         x = torch.randint(0, vocab, (bs, seq)).to(self.device)
         
-        logits, (final_x, final_v) = model(x)
+        res = model(x)
+        logits, (final_x, final_v) = res[0], res[1]
         
         self.assertEqual(logits.shape, (bs, seq, vocab))
         self.assertEqual(final_x.shape, (bs, dim))

@@ -66,8 +66,8 @@ class ReactiveChristoffel(LowRankChristoffel):
             gamma = gamma * (1.0 + self.plasticity * energy)
             
         # 2. Logical Singularities (Black Holes)
+        if self.active_cfg.get('singularities', {}).get('enabled', False):
             # Check Semantic Potential V(x)
-            # We use the existing self.V gate from LowRankChristoffel
             if self.is_torus:
                  x_in = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
             else:
@@ -75,11 +75,8 @@ class ReactiveChristoffel(LowRankChristoffel):
             potential = torch.sigmoid(self.V(x_in)) # [batch, 1]
             
             # If we are very sure (High Potential), trigger Singularity
-            # This creates a stiff attractor
-            is_singularity = (potential > self.singularity_threshold).float()
-            
-            # Apply Black Hole Gravity: Gamma * Strength
-            # But only where potential is high
+            # GRADIENT FIX: Use soft-sigmoid instead of hard threshold for differentiability
+            is_singularity = torch.sigmoid(10.0 * (potential - self.singularity_threshold))
             singularity_mult = 1.0 + is_singularity * (self.black_hole_strength - 1.0)
             gamma = gamma * singularity_mult
             

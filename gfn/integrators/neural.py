@@ -10,6 +10,11 @@ Idea: x_{t+1} = x_t + v_t * NeuralNet(x_t, v_t)
 import torch
 import torch.nn as nn
 
+try:
+    from gfn.geometry.boundaries import apply_boundary_python
+except ImportError:
+    def apply_boundary_python(x, tid): return x
+
 class NeuralIntegrator(nn.Module):
     def __init__(self, christoffel, dt=0.01, dim=None):
         super().__init__()
@@ -23,6 +28,8 @@ class NeuralIntegrator(nn.Module):
             self.dim = dim
         elif hasattr(christoffel, 'dim'):
             self.dim = christoffel.dim
+        elif hasattr(christoffel, 'W') and christoffel.W is not None:
+             self.dim = christoffel.W.shape[0]
         else:
             self.dim = 16 # Fallback
         
@@ -38,7 +45,12 @@ class NeuralIntegrator(nn.Module):
         nn.init.constant_(self.controller[2].bias, 0.55)
         nn.init.xavier_uniform_(self.controller[0].weight, gain=0.1) # low gain to start neutral
 
-    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False):
+    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False, **kwargs):
+        # Determine Topology
+        topo_id = getattr(self.christoffel, 'topology_id', 0)
+        if topo_id == 0 and hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus:
+                topo_id = 1
+
         for _ in range(steps):
             # 0. Handle Force
             if force is None:
@@ -52,14 +64,17 @@ class NeuralIntegrator(nn.Module):
             dynamics_dt = self.base_dt * dt_scale * learned_scale
             
             # 2. Symplectic Step (Leapfrog-like using dynamic dt)
-            acc = -self.christoffel(v, x)
+            acc = -self.christoffel(v, x, force=f_in, **kwargs)
             if force is not None:
                 acc = acc + force
                 
             v_half = v + 0.5 * dynamics_dt * acc
             x = x + dynamics_dt * v_half
             
-            acc_next = -self.christoffel(v_half, x)
+            # Apply Boundary (Torus)
+            x = apply_boundary_python(x, topo_id)
+            
+            acc_next = -self.christoffel(v_half, x, force=f_in, **kwargs)
             if force is not None:
                 acc_next = acc_next + force
                 

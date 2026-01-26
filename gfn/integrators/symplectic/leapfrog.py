@@ -33,8 +33,16 @@ class LeapfrogIntegrator(nn.Module):
                 W = getattr(self.christoffel, 'W', None)
                 
                 if U is not None and W is not None:
-                    return leapfrog_fused(x, v, force, U, W, self.dt, dt_scale, steps=steps)
-            except Exception:
+                    topology_id = kwargs.get('topology', getattr(self.christoffel, 'topology_id', 0))
+                    Wf = kwargs.get('W_forget_stack', None)
+                    bf = kwargs.get('b_forget_stack', None)
+                    if Wf is not None and Wf.dim() == 3:
+                        Wf = Wf[0]
+                    if bf is not None and bf.dim() == 2:
+                        bf = bf[0]
+                    return leapfrog_fused(x, v, force, U, W, self.dt, dt_scale, steps=steps, topology=topology_id, Wf=Wf, bf=bf)
+            except Exception as e:
+                print(f"[GFN:WARN] Leapfrog CUDA Kernel execution failed: {e}")
                 pass
 
         curr_x, curr_v = x, v
@@ -54,14 +62,32 @@ class LeapfrogIntegrator(nn.Module):
                     gamma, mu = res
                 else:
                     gamma, mu = res, 0.0 # Fallback
+                Wf = kwargs.get('W_forget_stack', None)
+                Wi = kwargs.get('W_input_stack', None)
+                bf = kwargs.get('b_forget_stack', None)
+                
+                topology_id = kwargs.get('topology', getattr(self.christoffel, 'topology_id', 0))
+                if topology_id == 0 and hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus:
+                     topology_id = 1
+                if Wf is not None and bf is not None:
+                    if Wf.dim() == 3:
+                        Wf = Wf[0]
+                    if bf.dim() == 2:
+                        bf = bf[0]
+                    feat = curr_x
+                    if topology_id == 1:
+                        feat = torch.cat([torch.sin(curr_x), torch.cos(curr_x)], dim=-1)
+                    gate = torch.matmul(feat, Wf.t()) + bf
+                    mu = torch.sigmoid(gate) * 5.0
                     
+                # Match CUDA v5.0: Implicit Update
+                # v_half = (curr_v + h * (force - gamma)) / (1.0 + h * mu)
                 v_half = (curr_v + h * (force - gamma)) / (1.0 + h * mu)
                 
                 # 2. Drift (full step position)
                 curr_x = curr_x + effective_dt * v_half
                 
                 # Apply Boundary (Torus)
-                topology_id = kwargs.get('topology', 0)
                 curr_x = apply_boundary_python(curr_x, topology_id)
                 
                 # 3. Kick (half step velocity at new pos)
@@ -70,7 +96,21 @@ class LeapfrogIntegrator(nn.Module):
                     gamma_half, mu_half = res_half
                 else:
                     gamma_half, mu_half = res_half, 0.0
+                Wf = kwargs.get('W_forget_stack', None)
+                Wi = kwargs.get('W_input_stack', None)
+                bf = kwargs.get('b_forget_stack', None)
+                if Wf is not None and bf is not None:
+                    if Wf.dim() == 3:
+                        Wf = Wf[0]
+                    if bf.dim() == 2:
+                        bf = bf[0]
+                    feat = curr_x
+                    if topology_id == 1:
+                        feat = torch.cat([torch.sin(curr_x), torch.cos(curr_x)], dim=-1)
+                    gate = torch.matmul(feat, Wf.t()) + bf
+                    mu_half = torch.sigmoid(gate) * 5.0
                     
+                # Match CUDA v5.0: Implicit Update
                 curr_v = (v_half + h * (force - gamma_half)) / (1.0 + h * mu_half)
         finally:
             self.christoffel.return_friction_separately = was_separate

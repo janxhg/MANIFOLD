@@ -12,22 +12,22 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 print("="*70)
-print("  CUDA KERNEL COMPILATION TEST")
+print("  GFN CUDA KERNEL COMPILATION TEST")
 print("="*70)
 
-print(f"\n✓ PyTorch version: {torch.__version__}")
-print(f"✓ CUDA available: {torch.cuda.is_available()}")
+print(f"\n[GFN] PyTorch version: {torch.__version__}")
+print(f"[GFN] CUDA available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
-    print(f"✓ CUDA version: {torch.version.cuda}")
-    print(f"✓ GPU: {torch.cuda.get_device_name(0)}")
+    print(f"[GFN] CUDA version: {torch.version.cuda}")
+    print(f"[GFN] GPU: {torch.cuda.get_device_name(0)}")
 
-print("\n🔧 Attempting to load CUDA kernels...")
+print("\n[GFN] Attempting to load CUDA kernels...")
 
 try:
     from gfn.cuda.ops import christoffel_fused, leapfrog_fused, CUDA_AVAILABLE
     
     if CUDA_AVAILABLE:
-        print("✅ CUDA kernels loaded successfully!")
+        print("[GFN] CUDA kernels loaded successfully!")
         
         # Quick functionality test
         device = torch.device('cuda')
@@ -38,15 +38,15 @@ try:
         U = torch.randn(dim, rank, device=device)
         W = torch.randn(dim, rank, device=device)
         
-        print("\n🧪 Testing Christoffel kernel...")
+        print("\n[GFN] Testing Christoffel kernel...")
         gamma = christoffel_fused(v, U, W)
         print(f"   Input shape: {v.shape}")
         print(f"   Output shape: {gamma.shape}")
         print(f"   Output range: [{gamma.min().item():.3f}, {gamma.max().item():.3f}]")
-        print("   ✓ Christoffel kernel works!")
+        print("   [OK] Christoffel kernel works!")
         
         # Test leapfrog_fused
-        print("\n🧪 Testing Leapfrog kernel...")
+        print("\n[GFN] Testing Leapfrog kernel...")
         x = torch.randn(batch, dim, device=device)
         v = torch.randn(batch, dim, device=device)
         f = torch.randn(batch, dim, device=device)
@@ -54,18 +54,18 @@ try:
         x_new, v_new = leapfrog_fused(x, v, f, U, W, dt=0.1, dt_scale=1.0)
         print(f"   Input shape: {x.shape}")
         print(f"   Output shapes: x={x_new.shape}, v={v_new.shape}")
-        print("   ✓ Leapfrog kernel works!")
+        print("   [OK] Leapfrog kernel works!")
         
         print("\n" + "="*70)
-        print("  ✅ ALL KERNELS FUNCTIONAL!")
+        print("  [SUCCESS] ALL KERNELS FUNCTIONAL!")
         print("="*70)
         
     else:
-        print("❌ CUDA kernels failed to load (falling back to PyTorch)")
-        print("   This is okay - PyTorch fallback will be used automatically")
+        print("[GFN:ERROR] CUDA kernels failed to load (falling back to PyTorch)")
+        print("   [INFO] PyTorch fallback will be used automatically")
         
 except Exception as e:
-    print(f"❌ Error loading kernels: {e}")
+    print(f"[GFN:ERROR] Error loading kernels: {e}")
     import traceback
     traceback.print_exc()
-    print("\n⚠️  Kernels not functional, but PyTorch fallback available")
+    print("\n[GFN:WARN] Kernels not functional, but PyTorch fallback available")

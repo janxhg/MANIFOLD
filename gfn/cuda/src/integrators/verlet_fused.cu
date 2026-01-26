@@ -1,5 +1,4 @@
-
-#include "../../include/christoffel_impl.cuh"
+#include "../../include/forces.cuh"
 
 #define BLOCK_SIZE 256
 
@@ -17,7 +16,9 @@ __global__ void verlet_fused_kernel(
     const int dim,
     const int rank,
     const int steps,
-    int topology
+    int topology,
+    float R_val,
+    float r_val
 ) {
     extern __shared__ float s_mem_f[];
     float* s_x = s_mem_f;
@@ -25,10 +26,10 @@ __global__ void verlet_fused_kernel(
     float* s_gamma = s_v + dim;
     float* s_h = s_gamma + dim;
     
-    double* s_mem_d = (double*)(s_h + rank + (rank % 2));
-    double* s_E = s_mem_d;
-    double* s_P = s_E + 1;
-    float* s_M = (float*)(s_P + 1);
+    // Double alignment
+    size_t offset_f = (3 * dim + rank);
+    if (offset_f % 2 != 0) offset_f++;
+    double* s_buf_energy = (double*)(s_mem_f + offset_f);
 
     const int b = blockIdx.x;
     const int tid = threadIdx.x;
@@ -43,25 +44,27 @@ __global__ void verlet_fused_kernel(
     const float eff_dt = dt * dt_scale;
 
     for (int s = 0; s < steps; s++) {
-        // Position Verlet:
-        // x_half = x + 0.5 * dt * v
+        // Position Verlet: x += 0.5 * dt * v
         for (int i = tid; i < dim; i += blockDim.x) {
             s_x[i] += 0.5f * eff_dt * s_v[i];
         }
         __syncthreads();
 
-        // a = f - Γ(v)
-        christoffel_device(s_v, U, W, s_gamma, s_x, nullptr, dim, rank, 0.0f, 1.0f, 1.0f, false, topology, nullptr, nullptr, nullptr, nullptr, s_h, s_E, s_P, s_M);
+        // 1. Plasticity
+        float M = compute_plasticity_scale(s_buf_energy, s_v, dim, tid, 0.0f); // Default 0
+        
+        // 2. Christoffel
+        compute_christoffel_force(s_gamma, s_v, s_x, U, W, s_h, dim, rank, tid, topology, M, R_val, r_val);
         __syncthreads();
         
-        // v_new = v + dt * a
+        // v += dt * (f - gamma)
         for (int i = tid; i < dim; i += blockDim.x) {
             float f_val = (f != nullptr) ? f[b * dim + i] : 0.0f;
             s_v[i] += eff_dt * (f_val - s_gamma[i]);
         }
         __syncthreads();
 
-        // x_new = x_half + 0.5 * dt * v_new
+        // x += 0.5 * dt * v
         for (int i = tid; i < dim; i += blockDim.x) {
             s_x[i] += 0.5f * eff_dt * s_v[i];
         }
@@ -80,11 +83,11 @@ extern "C" void launch_verlet_fused(
     float* x_new, float* v_new,
     float dt, float dt_scale,
     int batch, int dim, int rank,
-    int steps, int topology,
+    int steps, int topology, float R_val, float r_val,
     cudaStream_t stream
 ) {
     int shared = (3 * dim + rank + 16) * sizeof(float) + 2 * sizeof(double);
     verlet_fused_kernel<<<batch, BLOCK_SIZE, shared, stream>>>(
-        x, v, f, U, W, x_new, v_new, dt, dt_scale, batch, dim, rank, steps, topology
+        x, v, f, U, W, x_new, v_new, dt, dt_scale, batch, dim, rank, steps, topology, R_val, r_val
     );
 }

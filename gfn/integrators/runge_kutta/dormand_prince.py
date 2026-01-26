@@ -13,6 +13,10 @@ try:
 except ImportError:
     CUDA_AVAILABLE = False
 
+try:
+    from gfn.geometry.boundaries import apply_boundary_python
+except ImportError:
+    def apply_boundary_python(x, tid): return x
 
 class DormandPrinceIntegrator(nn.Module):
     r"""
@@ -33,82 +37,92 @@ class DormandPrinceIntegrator(nn.Module):
         
         # a: Runge-Kutta matrix (flattened or manual for efficiency)
         # b5: 5th order weights
+        # Coefficients (DP54)
+        self.a21 = 1/5
+        self.a31, self.a32 = 3/40, 9/40
+        self.a41, self.a42, self.a43 = 44/45, -56/15, 32/9
+        self.a51, self.a52, self.a53, self.a54 = 19372/6561, -25360/2187, 64448/6561, -212/729
+        self.a61, self.a62, self.a63, self.a64, self.a65 = 9017/3168, -355/33, 46732/5247, 49/176, -5103/18656
+        
+        # b5: 5th order weights
         self.b5 = [35/384, 0, 500/1113, 125/192, -2187/6784, 11/84, 0]
         
-    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False):
+    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False, **kwargs):
         # Try Professional Fused CUDA Kernel
         if CUDA_AVAILABLE and x.is_cuda and not collect_christ:
             try:
                 U = getattr(self.christoffel, 'U', None)
                 W = getattr(self.christoffel, 'W', None)
                 if U is not None and W is not None:
-                    return dormand_prince_fused(x, v, force, U, W, self.base_dt, dt_scale, steps=steps)
+                    topology = getattr(self.christoffel, 'topology_id', 0)
+                    if hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus: topology = 1
+                    
+                    R = getattr(self.christoffel, 'R', 2.0)
+                    r = getattr(self.christoffel, 'r', 1.0)
+                    return dormand_prince_fused(x, v, force, U, W, self.base_dt, dt_scale, steps=steps, topology=topology, R=R, r=r)
             except Exception:
                 pass
 
         dt = self.base_dt * dt_scale
         
-        # Coefficients (DP54)
-        a21 = 1/5
-        a31, a32 = 3/40, 9/40
-        a41, a42, a43 = 44/45, -56/15, 32/9
-        a51, a52, a53, a54 = 19372/6561, -25360/2187, 64448/6561, -212/729
-        a61, a62, a63, a64, a65 = 9017/3168, -355/33, 46732/5247, 49/176, -5103/18656
-        # a7... same as b5 for FSAL property
+        # Determine Topology
+        topo_id = getattr(self.christoffel, 'topology_id', 0)
+        if topo_id == 0 and hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus:
+                topo_id = 1
         
         curr_x, curr_v = x, v
+        k1_v_cache = None
         for _ in range(steps):
             dt = self.base_dt * dt_scale
             
-            # Coefficients (DP54)
-            a21 = 1/5
-            a31, a32 = 3/40, 9/40
-            a41, a42, a43 = 44/45, -56/15, 32/9
-            a51, a52, a53, a54 = 19372/6561, -25360/2187, 64448/6561, -212/729
-            a61, a62, a63, a64, a65 = 9017/3168, -355/33, 46732/5247, 49/176, -5103/18656
-            
             def dynamics(tx, tv):
-                acc = -self.christoffel(tv, tx)
+                acc = -self.christoffel(tv, tx, force=force, **kwargs)
                 if force is not None:
                     acc = acc + force
                 return acc
                 
             # k1
             k1_x = curr_v
-            k1_v = dynamics(curr_x, curr_v)
+            if k1_v_cache is None:
+                k1_v = dynamics(curr_x, curr_v)
+            else:
+                k1_v = k1_v_cache
+                k1_v_cache = None
             
             # k2
-            x2 = curr_x + dt * (a21*k1_x)
-            v2 = curr_v + dt * (a21*k1_v)
+            x2 = apply_boundary_python(curr_x + dt * (self.a21*k1_x), topo_id)
+            v2 = curr_v + dt * (self.a21*k1_v)
             k2_x = v2
             k2_v = dynamics(x2, v2)
             
             # k3
-            x3 = curr_x + dt * (a31*k1_x + a32*k2_x)
-            v3 = curr_v + dt * (a31*k1_v + a32*k2_v)
+            x3 = apply_boundary_python(curr_x + dt * (self.a31*k1_x + self.a32*k2_x), topo_id)
+            v3 = curr_v + dt * (self.a31*k1_v + self.a32*k2_v)
             k3_x = v3
             k3_v = dynamics(x3, v3)
             
             # k4
-            x4 = curr_x + dt * (a41*k1_x + a42*k2_x + a43*k3_x)
-            v4 = curr_v + dt * (a41*k1_v + a42*k2_v + a43*k3_v)
+            x4 = apply_boundary_python(curr_x + dt * (self.a41*k1_x + self.a42*k2_x + self.a43*k3_x), topo_id)
+            v4 = curr_v + dt * (self.a41*k1_v + self.a42*k2_v + self.a43*k3_v)
             k4_x = v4
             k4_v = dynamics(x4, v4)
             
             # k5
-            x5 = curr_x + dt * (a51*k1_x + a52*k2_x + a53*k3_x + a54*k4_x)
-            v5 = curr_v + dt * (a51*k1_v + a52*k2_v + a53*k3_v + a54*k4_v)
+            x5 = apply_boundary_python(curr_x + dt * (self.a51*k1_x + self.a52*k2_x + self.a53*k3_x + self.a54*k4_x), topo_id)
+            v5 = curr_v + dt * (self.a51*k1_v + self.a52*k2_v + self.a53*k3_v + self.a54*k4_v)
             k5_x = v5
             k5_v = dynamics(x5, v5)
             
             # k6
-            x6 = curr_x + dt * (a61*k1_x + a62*k2_x + a63*k3_x + a64*k4_x + a65*k5_x)
-            v6 = curr_v + dt * (a61*k1_v + a62*k2_v + a63*k3_v + a64*k4_v + a65*k5_v)
+            x6 = apply_boundary_python(curr_x + dt * (self.a61*k1_x + self.a62*k2_x + self.a63*k3_x + self.a64*k4_x + self.a65*k5_x), topo_id)
+            v6 = curr_v + dt * (self.a61*k1_v + self.a62*k2_v + self.a63*k3_v + self.a64*k4_v + self.a65*k5_v)
             k6_x = v6
             k6_v = dynamics(x6, v6)
             
             # Result using b5
             curr_x = curr_x + dt * (self.b5[0]*k1_x + self.b5[2]*k3_x + self.b5[3]*k4_x + self.b5[4]*k5_x + self.b5[5]*k6_x)
+            curr_x = apply_boundary_python(curr_x, topo_id)
             curr_v = curr_v + dt * (self.b5[0]*k1_v + self.b5[2]*k3_v + self.b5[3]*k4_v + self.b5[4]*k5_v + self.b5[5]*k6_v)
+            k1_v_cache = dynamics(curr_x, curr_v)
         
         return curr_x, curr_v

@@ -17,6 +17,11 @@ we approximate the force F(x) by evaluating \Gamma at v=0 (or a learned proxy).
 import torch
 import torch.nn as nn
 
+try:
+    from gfn.geometry.boundaries import apply_boundary_python
+except ImportError:
+    def apply_boundary_python(x, tid): return x
+
 class CouplingFlowIntegrator(nn.Module):
     def __init__(self, christoffel, dt=0.01):
         super().__init__()
@@ -31,6 +36,8 @@ class CouplingFlowIntegrator(nn.Module):
         # Automatic dimension discovery
         if hasattr(christoffel, 'dim'):
             self.dim = christoffel.dim
+        elif hasattr(christoffel, 'W') and christoffel.W is not None:
+             self.dim = christoffel.W.shape[0]
         else:
             self.dim = 16 # Fallback
              
@@ -43,7 +50,12 @@ class CouplingFlowIntegrator(nn.Module):
         nn.init.zeros_(self.drift_net[2].weight)
         nn.init.zeros_(self.drift_net[2].bias)
 
-    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False):
+    def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False, **kwargs):
+        # Determine Topology
+        topo_id = getattr(self.christoffel, 'topology_id', 0)
+        if topo_id == 0 and hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus:
+                topo_id = 1
+
         # We can approximate coupling flow with Verlet fused if needed, but it's logically different
         # For now, standard Python loop for stability
         for _ in range(steps):
@@ -56,13 +68,16 @@ class CouplingFlowIntegrator(nn.Module):
                 
             # Symmetric Splitting (Verification)
             v_dummy = torch.zeros_like(x)
-            acc_1 = -self.christoffel(v_dummy, x) + f_in
+            acc_1 = -self.christoffel(v_dummy, x, force=f_in, **kwargs) + f_in
             v_half = v + 0.5 * dt * acc_1
             
             warp = self.drift_net(v_half)
             x = x + dt * (v_half + warp)
             
-            acc_2 = -self.christoffel(v_dummy, x) + f_in
+            # Apply Boundary (Torus)
+            x = apply_boundary_python(x, topo_id)
+            
+            acc_2 = -self.christoffel(v_dummy, x, force=f_in, **kwargs) + f_in
             v = v_half + 0.5 * dt * acc_2
             
         return x, v

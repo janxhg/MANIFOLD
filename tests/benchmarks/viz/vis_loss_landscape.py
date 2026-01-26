@@ -151,7 +151,7 @@ def run_landscape_analysis():
     # GFN Surface
     ax1 = fig.add_subplot(121, projection='3d')
     surf1 = ax1.plot_surface(Xg, Yg, Zg, cmap='viridis', edgecolor='none', antialiased=True, alpha=0.9)
-    ax1.set_title('Hyper-Torus: Convex Energy Basin', fontsize=16, fontweight='bold', pad=20)
+    ax1.set_title('Hyper-Torus: Global Basin with Local Fractal Attractors', fontsize=16, fontweight='bold', pad=20)
     ax1.set_zlabel('Angular Error', fontsize=12)
     ax1.view_init(elev=30, azim=45)
     fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5, label='Potential Energy (1-cos)')
@@ -170,7 +170,7 @@ def run_landscape_analysis():
     # 4. Contour Plots
     fig2, (cx1, cx2) = plt.subplots(1, 2, figsize=(16, 7))
     cx1.contourf(Xg, Yg, Zg, levels=25, cmap='viridis')
-    cx1.set_title("Hyper-Torus: Smooth Gradient Flow", fontweight='bold')
+    cx1.set_title("Hyper-Torus: Stable Macro-Basin", fontweight='bold')
     cx2.contourf(Xt, Yt, Zt, levels=25, cmap='inferno')
     cx2.set_title("Transformer: Rugged Topology (Local Minima)", fontweight='bold')
     logger.save_plot(fig2, "loss_landscape_contour.png")

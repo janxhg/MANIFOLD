@@ -132,7 +132,7 @@ class MLayer(nn.Module):
         for i in range(heads):
             self.christoffels.append(christoffel_map[i])
             
-        # 🚀 PERFORMANCE: Stack Christoffel Parameters for Vectorized Head Processing
+        # Performance Optimization: Stack Christoffel Parameters for Vectorized Head Processing
         # This allows us to call a single bmm instead of looping over heads.
         self.register_buffer('headless_mode', torch.tensor(False)) 
         
@@ -149,7 +149,8 @@ class MLayer(nn.Module):
         self.topology_id = 1 if topo_type == 'torus' else 0
 
         if self.use_dynamic_time:
-            print(f"[*] Autonomous Geometric Attention ENABLED (Time Warping: Dynamic Gating + base_dt={base_dt})")
+            # Silenced: Handled by Model Manifest
+            pass
         
         # Gating per head (Riemannian Wormholes)
         self.gatings = nn.ModuleList([
@@ -266,9 +267,18 @@ class MLayer(nn.Module):
              f_heads = torch.zeros_like(x_heads)
              
         # 3. Vectorized Gating [Heads, Batch, 1]
-        gates = torch.stack([self.gatings[i](x_heads[i]) for i in range(self.heads)], dim=0)
         dt_base = torch.nn.functional.softplus(self.dt_params).view(self.heads, 1, 1)
-        scale = (dt_base * gates) / self.base_dt # [Heads, Batch, 1]
+        
+        # Only apply dynamic gating if enabled in config
+        use_gating = self.physics_config.get('active_inference', {}).get('dynamic_time', {}).get('enabled', False)
+        
+        if use_gating:
+            gates = torch.stack([self.gatings[i](x_heads[i]) for i in range(self.heads)], dim=0)
+            scale = dt_base * gates # [Heads, Batch, 1]
+        else:
+            # Define dummy gates for context passing (All 1.0 = Fully Open)
+            gates = torch.ones(self.heads, batch, 1, device=x.device, dtype=x.dtype)
+            scale = dt_base # Static scaling matching CUDA kernel default
         
         # 4. CLUTCH PARAMETER STACKING
         # We need to construct W_forget, W_input for the kernel.
@@ -352,7 +362,7 @@ class MLayer(nn.Module):
             # FOR NOW: We rely on the fact that `recurrent_manifold_fused` is called if available.
             # We need to pass `W_forget_stack=...` to the integrator.
             
-            # HACK: We attach the clutch weights to `self.christoffels[i]` or pass via kwargs.
+            # Note: We attach the clutch weights to `self.christoffels[i]` or pass via kwargs.
             # Most clean way: Update `Integrator.step` to accept `clutch_params`.
             
             # For this Level 13 Fix, we assume we are using `recurrent_manifold_fused` directly
@@ -389,7 +399,8 @@ class MLayer(nn.Module):
         if self.heads > 1:
             if self.topology_id == 1:
                  # PERIODIC MIXING: Mixer sees [sin(x), cos(x), v]
-                 mixer_in_x = torch.cat([torch.sin(x_cat), torch.cos(x_cat), v_cat], dim=-1)
+                 v_mix = torch.tanh(v_cat / 100.0)
+                 mixer_in_x = torch.cat([torch.sin(x_cat), torch.cos(x_cat), v_mix], dim=-1)
                  x_next = self.out_proj_x(mixer_in_x)
             else:
                  x_next = self.out_proj_x(x_cat)
@@ -397,8 +408,16 @@ class MLayer(nn.Module):
             v_next = self.out_proj_v(v_cat)
             
             # Normalize to prevent magnitude creep (Bypass for Torus to preserve phase)
+            # Normalize to prevent magnitude creep (Bypass for Torus to preserve phase)
             if self.topology_id != 1:
                 x_next = self.mixed_norm_x(x_next)
+            else:
+                # LEVEL 35: TORUS WRAPPING
+                # Project back to [0, 2pi] to maintain precision
+                PI = 3.14159265359
+                TWO_PI = 2.0 * PI
+                x_next = torch.remainder(x_next, TWO_PI)
+                
             v_next = self.mixed_norm_v(v_next)
         else:
             x_next, v_next = x_cat, v_cat

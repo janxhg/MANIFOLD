@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from gfn.model import Manifold
+from gfn.cuda import ops
 
 print("="*60)
 print("CUDA vs PYTHON NUMERICAL VALIDATION")
@@ -20,6 +21,10 @@ print("="*60)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 torch.manual_seed(42)
+
+if not torch.cuda.is_available():
+    print("\n[SKIP] CUDA no disponible, omitiendo validación numérica CUDA vs Python.")
+    sys.exit(0)
 
 # Create two identical models
 model_cuda = Manifold(
@@ -42,24 +47,8 @@ model_python = Manifold(
     use_scan=False
 ).to(device)
 
-# --- MONKEY PATCH START ---
-# Force Python model to use fixed dt_scale=1.0 by intercepting the integrator call.
-# This aligns it with the CUDA kernel which currently effectively uses fixed dt (gating ignored).
-try:
-    # Iterate over layers and integrators to wrap forward method
-    for layer in model_python.layers:
-        for integ in layer.integrators:
-            original_integ_forward = integ.forward
-            # Define wrapper with defaults to match signature
-            def forced_integ_forward(x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False):
-                # Force dt_scale to 1.0 regardless of what MLayer passed (which used gating)
-                return original_integ_forward(x, v, force=force, dt_scale=1.0, steps=steps, collect_christ=collect_christ)
-            # Apply patch
-            integ.forward = forced_integ_forward
-    print("[TEST SETUP] Monkey-patched Python integrators to force dt_scale=1.0")
-except Exception as e:
-    print(f"[TEST SETUP] Failed to patch integrators: {e}")
-# --- MONKEY PATCH END ---
+# Fuerza ruta Python sin desactivar CUDA: usa collect_christ=True para evitar el kernel
+force_python_kwargs = {"collect_christ": True}
 
 # Copy weights to ensure identical models
 model_python.load_state_dict(model_cuda.state_dict())
@@ -70,22 +59,21 @@ inputs = torch.randint(0, 10, (2, 5)).to(device)
 print("\n[1/3] Running CUDA forward pass...")
 model_cuda.eval()
 with torch.no_grad():
-    logits_cuda, (x_cuda, v_cuda), _ = model_cuda(inputs, collect_christ=False)
+    outputs_cuda = model_cuda(inputs, collect_christ=False)
+    logits_cuda = outputs_cuda[0]
+    state_cuda = outputs_cuda[1] if len(outputs_cuda) > 1 else None
+    x_cuda, v_cuda = state_cuda if state_cuda is not None else (None, None)
 
 print(f"  CUDA output: logits={logits_cuda.shape}")
 print(f"  Sample logit values: {logits_cuda[0, 0, :5]}")
 
 print("\n[2/3] Running Python forward pass...")
-# Force Python by temporarily disabling CUDA
-from gfn.cuda import ops
-original_cuda_flag = ops.CUDA_AVAILABLE
-ops.CUDA_AVAILABLE = False
-
 model_python.eval()
 with torch.no_grad():
-    logits_python, (x_python, v_python), _ = model_python(inputs, collect_christ=False)
-
-ops.CUDA_AVAILABLE = original_cuda_flag
+    outputs_python = model_python(inputs, **force_python_kwargs)
+    logits_python = outputs_python[0]
+    state_python = outputs_python[1] if len(outputs_python) > 1 else None
+    x_python, v_python = state_python if state_python is not None else (None, None)
 
 print(f"  Python output: logits={logits_python.shape}")
 print(f"  Sample logit values: {logits_python[0, 0, :5]}")
