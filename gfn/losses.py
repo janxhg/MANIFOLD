@@ -8,63 +8,74 @@ Physics-informed loss functions for stable geodesic training.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .geometry.boundaries import toroidal_dist_python
 
 
-def hamiltonian_loss(velocities: list, lambda_h: float = 0.01) -> torch.Tensor:
+def hamiltonian_loss(velocities: list, states: list = None, metric_fn=None, lambda_h: float = 0.01, forces: list = None) -> torch.Tensor:
     """
-    Hamiltonian Energy Conservation Loss.
+    Riemannian Hamiltonian Energy Conservation Loss.
     
-    Penalizes the model if kinetic energy (||v||²) changes violently between 
-    timesteps. This enforces smooth geodesic flow and prevents gradient explosion.
+    If 'metric_fn' is provided, computes Energy = 0.5 * v^T g(x) v.
+    Otherwise fallbacks to Euclidean Energy = 0.5 * ||v||^2.
+    """
+    if lambda_h == 0.0 or not velocities or len(velocities) < 2:
+        return torch.tensor(0.0, device=velocities[0].device if (velocities and len(velocities) > 0) else 'cpu')
     
-    Formula:
-        L_H = λ * Σ_t |E_t - E_{t-1}|
-        where E_t = ||v_t||²
-    
-    Args:
-        velocities: List of velocity tensors [v_0, v_1, ..., v_T], each [batch, dim]
-        lambda_h: Regularization strength (default: 0.01)
+    energies = []
+    for i in range(len(velocities)):
+        v = velocities[i]
+        if metric_fn is not None and states is not None:
+             x = states[i]
+             # E = 0.5 * sum(g_ii * v_i^2) for diagonal metrics
+             g = metric_fn(x) 
+             e = 0.5 * torch.sum(g * v.pow(2), dim=-1)
+        else:
+             e = 0.5 * v.pow(2).sum(dim=-1)
+        energies.append(e)
         
-    Returns:
-        Scalar loss tensor
+    diffs = []
+    for i in range(len(energies) - 1):
+        dE = torch.abs(energies[i+1] - energies[i])
+        if forces is not None and i < len(forces):
+            f_norm = forces[i].pow(2).sum(dim=-1)
+            mask = (f_norm < 1e-4).float()
+            dE = dE * mask
+        diffs.append(dE)
+        
+    return lambda_h * torch.stack(diffs).mean()
+
+
+def kinetic_energy_penalty(velocities: list, lambda_k: float = 0.001) -> torch.Tensor:
     """
-    if len(velocities) < 2:
-        return torch.tensor(0.0, device=velocities[0].device)
+    L2 Regularization on Velocities.
+    Encourages the model to be 'lazy' and move only when necessary.
+    """
+    if not velocities:
+        return torch.tensor(0.0)
     
-    # Compute kinetic energy at each timestep: E = ||v||²
-    energies = [v.pow(2).sum(dim=-1) for v in velocities]  # List of [batch]
-    
-    # Compute absolute energy differences
-    energy_diffs = []
-    for e1, e2 in zip(energies[:-1], energies[1:]):
-        energy_diffs.append(torch.abs(e2 - e1))
-    
-    # Mean over time and batch
-    total_diff = torch.stack(energy_diffs).mean()
-    
-    return lambda_h * total_diff
+    all_v = torch.stack(velocities)
+    return lambda_k * all_v.pow(2).mean()
 
 
 def geodesic_regularization(velocities: list, christoffel_outputs: list, lambda_g: float = 0.001) -> torch.Tensor:
     """
     Geodesic Curvature Regularization.
-    
-    Penalizes high curvature (large Christoffel outputs) to prevent 
-    "semantic black holes" where gradients explode.
-    
-    Args:
-        velocities: List of velocity tensors
-        christoffel_outputs: List of Γ(v,v) outputs from Christoffel networks
-        lambda_g: Regularization strength
-        
-    Returns:
-        Scalar loss tensor
+    Supports both standard list of tensors and fused pre-computed sum.
     """
     if not christoffel_outputs:
         return torch.tensor(0.0)
     
-    # Efficient Vectorization: Instead of 480+ CUDA kernels, we do one.
-    # christoffel_outputs is a list of [batch, d] tensors.
+    # Check if this is a fused regulation tensor (single tensor in list)
+    if len(christoffel_outputs) == 1 and christoffel_outputs[0].dim() == 1:
+        # Fused case: christoffel_outputs[0] is sum(||Gamma||^2) per batch item
+        # To match all_curvatures.pow(2).mean(), we must divide by total elements per batch item
+        # This isn't strictly known here, but we can pass it or retrieve it.
+        # For MANIFOLD models, this is normally (depth * seq_len * dim)
+        # We'll use a conservative estimate or let it be scaled by lambda_g.
+        # Actually, let's keep it simple as a sum for now, but scaled.
+        return lambda_g * christoffel_outputs[0].mean() / 1000.0 # Heuristic scaling
+    
+    # Standard Vectorization:
     all_curvatures = torch.stack(christoffel_outputs) # [N_heads*Seq, B, d]
     curvature_norms = all_curvatures.pow(2).mean()
     return lambda_g * curvature_norms
@@ -112,6 +123,39 @@ def noether_loss(christoffel_outputs: list, isomeric_groups: list = None, lambda
 
 
 
+def circular_distance_loss(x_pred, x_target):
+    """
+    Holographic Phase Loss (Level 13).
+    
+    Computes distance on the flat Torus T^n:
+    L = 1 - cos(x_pred - x_target)
+    
+    Properties:
+    1. Bounded [0, 2]
+    2. Continuous at 2pi boundary
+    3. Gradient is sin(delta), naturally clipped [-1, 1]
+    """
+    delta = x_pred - x_target
+    return (1.0 - torch.cos(delta)).mean()
+
+class CircularDistanceLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, x_pred, x_target):
+        return circular_distance_loss(x_pred, x_target)
+
+def toroidal_distance_loss(x_pred, x_target):
+    dist = toroidal_dist_python(x_pred, x_target)
+    return dist.pow(2).mean()
+
+class ToroidalDistanceLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x_pred, x_target):
+        return toroidal_distance_loss(x_pred, x_target)
+
 
 class GFNLoss(nn.Module):
     """
@@ -158,7 +202,7 @@ class GFNLoss(nn.Module):
         
         # Hamiltonian regularization
         if velocities and len(velocities) > 1:
-            h_loss = hamiltonian_loss(velocities, self.lambda_h)
+            h_loss = hamiltonian_loss(velocities, lambda_h=self.lambda_h)
             total = total + h_loss
             loss_dict["hamiltonian"] = h_loss.item()
         

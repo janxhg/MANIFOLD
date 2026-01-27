@@ -62,6 +62,8 @@ env/
 ENV/
 .venv/
 .venv_scons/
+.venv311/
+.huggingface/
 
 # IDEs
 .vscode/
@@ -79,6 +81,8 @@ ENV/
 *.log
 logs/
 wandb/
+*.txt
+*.tx
 
 # CUDA compilation artifacts
 *.o
@@ -123,7 +127,8 @@ data/processed/
 *.gz
 *.zip
 *ubyte
-
+*.rar
+*.7z
 # Secrets and credentials
 .env
 secrets/
@@ -140,6 +145,4 @@ tmp/
 # Experiments (Local only)
 experiments/math_super_model/
 experiments/math_super_model/*
-
-# production
-.huggingface
+TRAINING_LOG.md

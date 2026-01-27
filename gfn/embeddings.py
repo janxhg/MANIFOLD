@@ -126,29 +126,40 @@ class FunctionalEmbedding(nn.Module):
     Modes:
     - 'sinusoidal': High-freq hash (Good for input uniqueness, bad for readout).
     - 'binary': Bitwise representation (Good for learning/readout).
+    - 'linear': Direct coordinate mapping (Essential for Parity/Arithmetic).
     
     O(1) Memory: Parameters do NOT scale with Vocab Size.
     """
-    def __init__(self, vocab_size, emb_dim, coord_dim=16, hidden_dim=64, layers=2, mode='binary'):
+    def __init__(self, vocab_size, emb_dim, coord_dim=16, hidden_dim=64, layers=2, mode='binary', impulse_scale=1.0, omega_0=30.0):
         super().__init__()
         self.mode = mode
         self.coord_dim = coord_dim
+        self.omega_0 = omega_0
+        self.impulse_scale = nn.Parameter(torch.tensor(impulse_scale), requires_grad=True)
             
-        # SIREN Network
-        net = []
-        net.append(SineLayer(self.coord_dim, hidden_dim, is_first=True, omega_0=30.0))
-        for _ in range(layers):
-            net.append(SineLayer(hidden_dim, hidden_dim, is_first=False, omega_0=30.0))
+        if self.mode == 'linear':
+            self.net = nn.Identity()
+            self.out_proj = nn.Linear(self.coord_dim, emb_dim)
+            # Level 32: Dense Broadcast Initialization
+            # When supervising all manifold dimensions with the same target (e.g. holographic parity),
+            # we need the impulse to reach ALL dimensions, not just the match between bit-index and dim-index.
+            with torch.no_grad():
+                nn.init.constant_(self.out_proj.weight, 1.0)
+                nn.init.zeros_(self.out_proj.bias)
+        else:
+            # SIREN Network
+            net = []
+            net.append(SineLayer(self.coord_dim, hidden_dim, is_first=True, omega_0=self.omega_0))
+            for _ in range(layers):
+                net.append(SineLayer(hidden_dim, hidden_dim, is_first=False, omega_0=self.omega_0))
+                
+            self.net = nn.Sequential(*net)
+            self.out_proj = nn.Linear(hidden_dim, emb_dim)
             
-        self.net = nn.Sequential(*net)
-        self.out_proj = nn.Linear(hidden_dim, emb_dim)
-        
-        # Proper SIREN Init (omega_0=30)
-        # SineLayer handles its own init, we just apply output boost
-        with torch.no_grad():
-            # self.net[0] is SineLayer, init is already correct there
-            self.out_proj.weight.data *= 1.5 # Boost signal for manifold force
-            nn.init.zeros_(self.out_proj.bias)
+            # Proper SIREN Init (omega_0=30)
+            with torch.no_grad():
+                self.out_proj.weight.data *= 1.5 
+                nn.init.zeros_(self.out_proj.bias)
             
         if self.mode == 'sinusoidal':
             # ensure even
@@ -165,14 +176,14 @@ class FunctionalEmbedding(nn.Module):
         B, L = input_ids.shape
         inputs = input_ids.unsqueeze(-1).float()
         
-        if self.mode == 'binary':
+        if self.mode == 'binary' or self.mode == 'linear':
              # Convert IDs to Bits [B, L, coord_dim]
-             # We assume coord_dim is enough bits
              mask = 2**torch.arange(self.coord_dim).to(input_ids.device)
-             # [B, L, 1] & [D] -> [B, L, D] (Broadcasting)
-             # (ids & mask) > 0  -> Boolean
              bits = (input_ids.unsqueeze(-1) & mask) > 0
-             coords = bits.float() * 2 - 1 # Map {0, 1} to {-1, 1} (Symmetric is better for SIREN)
+             if self.mode == 'linear':
+                 coords = bits.float() # Use {0, 1} for direct force channel
+             else:
+                 coords = bits.float() * 2 - 1 # Map {0, 1} to {-1, 1} for SIREN
         else:
             # Sinusoidal
             args = inputs * self.freqs
@@ -182,20 +193,14 @@ class FunctionalEmbedding(nn.Module):
         x_out = self.net(coords)
         out = self.out_proj(x_out)
         
-        # 3. Boost scale to match standard embedding variance
-        # SIREN + Xavier yields ~0.4, so 1.5x - 2.0x is safer for residuals
-        out = out * 1.5
+        # 3. Apply Multiplier
+        # Controlled by Level 12 impulse_scale interface
+        out = out * self.impulse_scale
         
         # Enforce Zero-Input = Zero-Force (Critical for Inertial Memory tasks like Parity)
         # If all coordinate bits are 0 (ID=0), force should be 0.
-        if self.mode == 'binary':
-             # bits: [B, L, C] -> max over C -> [B, L, 1]
-             # If any bit is 1, mask is 1. If all 0, mask is 0.
-             # bits was computed earlier but not saved in self (local var).
-             # Re-compute mask from input_ids (efficiently)
-             # Actually we need access to 'bits' from earlier.
-             # Let's rewrite the forward slightly to keep bits.
-             active_mask = (bits.float().sum(dim=-1, keepdim=True) > 0).float()
-             out = out * active_mask
+        if self.mode == 'binary' or self.mode == 'linear':
+         active_mask = (bits.float().sum(dim=-1, keepdim=True) > 0).float()
+         out = out * active_mask
              
         return out

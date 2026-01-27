@@ -14,15 +14,25 @@ class ImplicitReadout(nn.Module):
         temp_init: Initial temperature (high = smooth gradients)
         temp_final: Final temperature (low = sharp outputs)
     """
-    def __init__(self, dim, coord_dim, temp_init=5.0, temp_final=0.5):
+    def __init__(self, dim, coord_dim, temp_init=1.0, temp_final=0.2, topology=0):
         super().__init__()
         
+        self.topology = topology
+        self.is_torus = (topology == 1)
+        
         # MLP to output coordinates
+        # Toroidal input uses [sin(x), cos(x)]
+        in_dim = dim * 2 if self.is_torus else dim
         self.mlp = nn.Sequential(
-            nn.Linear(dim, dim),
+            nn.Linear(in_dim, dim), 
             nn.GELU(),
             nn.Linear(dim, coord_dim)
         )
+        
+        # Mark readout layers for init scaling in model.py
+        for module in self.mlp.modules():
+            if isinstance(module, nn.Linear):
+                module.is_readout = True
         
         # Temperature annealing parameters
         self.temp_init = temp_init
@@ -30,7 +40,7 @@ class ImplicitReadout(nn.Module):
         
         # Training progress tracker
         self.register_buffer('training_step', torch.tensor(0))
-        self.register_buffer('max_steps', torch.tensor(1500))
+        self.register_buffer('max_steps', torch.tensor(1000))
         
     def forward(self, x):
         """
@@ -39,21 +49,17 @@ class ImplicitReadout(nn.Module):
         Returns:
             bits_soft: [batch, seq, coord_dim] in range [0, 1]
         """
-        # Get continuous coordinates
-        coords = self.mlp(x)  # [batch, seq, coord_dim]
-        
-        if self.training:
-            # Temperature annealing: high temp early (smooth), low temp late (sharp)
-            progress = min(1.0, self.training_step.float() / self.max_steps)
-            temp = self.temp_init * (1.0 - progress) + self.temp_final * progress
-            
-            # Soft threshold with temperature
-            bits_soft = torch.sigmoid(coords / temp)
+        if self.is_torus:
+            # Map x -> [sin(x), cos(x)] to enforce periodicity
+            x_emb = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
         else:
-            # Inference: use final temperature for sharp outputs
-            bits_soft = torch.sigmoid(coords / self.temp_final)
+            x_emb = x
         
-        return bits_soft
+        # Gain provides sharper gradients for BCE
+        logits = self.mlp(x_emb) * 10.0 # [batch, seq, coord_dim]
+        
+        return logits
+        # Sigmoid is applied by the caller when needed
     
     def update_step(self):
         """Call this after each optimizer step to update temperature schedule."""

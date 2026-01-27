@@ -42,7 +42,7 @@ See [BENCHMARKS.md](BENCHMARKS.md) for complete results.
 - [Contributing Guide](../CONTRIBUTING.md) - How to contribute
 - [Changelog](../CHANGELOG.md) - Version history
 
----
+
 
 **Version**: 2.6.0 "Riemannian Stability"  
 **Last Updated**: January 18, 2026  

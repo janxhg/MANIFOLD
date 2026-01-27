@@ -9,4 +9,4 @@ and intermediate memory traffic.
 
 from .ops import christoffel_fused, leapfrog_fused
 
-__all__ = ['christoffel_fused', 'leapfrog_fused']
+__all__ = ['christoffel_fused', 'leapfrog_fused', 'euler_fused', 'heun_fused', 'rk4_fused', 'verlet_fused']

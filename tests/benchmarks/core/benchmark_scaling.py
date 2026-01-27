@@ -21,7 +21,10 @@ from gfn.model import Manifold
 
 def measure_scaling(dim, depth, heads, device, batch_size=16, seq_len=128):
     """Measure metrics for a model configuration."""
-    physics_config = {'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16}}
+    physics_config = {
+        'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
+        'readout': {'type': 'implicit', 'coord_dim': 16}
+    }
     model = Manifold(
         vocab_size=64,
         dim=dim,

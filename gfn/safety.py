@@ -5,7 +5,7 @@ try:
     PYNVML_AVAILABLE = True
 except ImportError:
     PYNVML_AVAILABLE = False
-    print("pynvml not installed. GPU monitoring disabled.")
+    print("[GFN:SAFETY] pynvml not installed. GPU monitoring disabled.")
 
 class GPUMonitor:
     def __init__(self, threshold_temp=70, check_interval=5.0):
@@ -19,9 +19,9 @@ class GPUMonitor:
             try:
                 pynvml.nvmlInit()
                 self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                print(f"GPU Monitor initialized. Threshold: {threshold_temp}C")
+                print(f"[GFN:SAFETY] GPU Monitor initialized. Threshold: {threshold_temp}C")
             except Exception as e:
-                print(f"Failed to init NVML: {e}")
+                print(f"[GFN:SAFETY] Failed to init NVML: {e}")
                 self.handle = None
         else:
             self.handle = None
@@ -39,17 +39,17 @@ class GPUMonitor:
                 temp = pynvml.nvmlDeviceGetTemperature(self.handle, pynvml.NVML_TEMPERATURE_GPU)
                 if temp > self.threshold:
                     if self.paused_event.is_set():
-                        print(f"\n[SAFETY] GPU Temp {temp}C > {self.threshold}C. Pausing training...")
+                        print(f"\n[GFN:SAFETY] GPU Temp {temp}C > {self.threshold}C. Pausing training...")
                         self.paused_event.clear() # Block training
                 else:
                     if not self.paused_event.is_set():
                         if temp < self.threshold - 5: # Hysteresis
-                            print(f"\n[SAFETY] GPU Cooled to {temp}C. Resuming...")
+                            print(f"\n[GFN:SAFETY] GPU Cooled to {temp}C. Resuming...")
                             self.paused_event.set()
                             
                 time.sleep(self.interval)
             except Exception as e:
-                print(f"Error reading GPU temp: {e}")
+                print(f"[GFN:SAFETY] Error reading GPU temp: {e}")
                 time.sleep(self.interval)
 
     def stop(self):

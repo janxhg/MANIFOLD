@@ -29,7 +29,7 @@ class RiemannianAdam(Optimizer):
         betas: Adam momentum coefficients (default: (0.9, 0.999))
         eps: Numerical stability (default: 1e-8)
         weight_decay: L2 regularization (default: 0.01)
-        retraction: Type of retraction ('euclidean', 'normalize', 'cayley')
+        retraction: Type of retraction ('euclidean', 'normalize', 'cayley', 'torus')
         max_norm: Maximum weight norm for retraction (default: 10.0)
     """
     
@@ -63,7 +63,7 @@ class RiemannianAdam(Optimizer):
                 grad = p.grad.data
                 
                 # Apply weight decay (decoupled, like AdamW)
-                if weight_decay != 0:
+                if weight_decay != 0 and retraction != 'torus':
                     p.data.mul_(1 - lr * weight_decay)
                 
                 # Get state
@@ -110,6 +110,15 @@ class RiemannianAdam(Optimizer):
                     norm = p.data.norm()
                     if norm > max_norm:
                         p.data.mul_(max_norm / norm)
+                
+                elif retraction == 'torus':
+                    if 'phase' not in state:
+                        state['phase'] = p.data.clone()
+                    phase = state['phase']
+                    if weight_decay != 0:
+                        phase.mul_(1 - lr * weight_decay)
+                    phase.add_(step_direction, alpha=-lr)
+                    p.data.copy_(torch.remainder(phase, 2.0 * math.pi))
                         
                 elif retraction == 'cayley':
                     # Cayley retraction for orthogonal-ish manifold

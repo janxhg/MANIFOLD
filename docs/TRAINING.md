@@ -1,15 +1,15 @@
 # MANIFOLD Training Guide
 
-**Version:** 2.6.0 "Symplectic Forgetting"  
-**Last Updated:** January 20, 2026
+**Version:** 2.6.2 "Symplectic Forgetting"
+**Last Updated:** January 27, 2026
 
 Complete guide for training MANIFOLD models, from quick start to advanced optimization.
 
----
 
-## Quick Start
 
-### Minimal Example
+## 1. Quick Start
+
+### 1.1 Minimal Example
 
 ```python
 import torch
@@ -43,11 +43,24 @@ for x, y in dataloader:
     optimizer.step()
 ```
 
----
+### 1.2 Installation Verification
 
-## Configuration
+```python
+# Verify RiemannianAdam is available
+from gfn.optim import RiemannianAdam
+print("RiemannianAdam available ✓")
 
-### Basic Configuration (config.yaml)
+# Verify physics is configured
+model = Manifold(vocab_size=2, dim=128, depth=6, heads=4)
+assert model.physics_config is not None
+print("Physics configuration verified ✓")
+```
+
+
+
+## 2. Configuration
+
+### 2.1 Basic Configuration (config.yaml)
 
 ```yaml
 model:
@@ -57,74 +70,102 @@ model:
   heads: 8
   rank: 32
   integrator_type: leapfrog
-  
+  impulse_scale: 80.0
+  holographic: true
+
 optimizer:
   type: RiemannianAdam
   lr: 1e-4
   weight_decay: 1e-4
   retraction: normalize
   max_norm: 10.0
-  
+
 training:
   batch_size: 32
   max_epochs: 100
   gradient_clip: 0.05
-  
+
 scheduler:
   type: OneCycleLR
   max_lr: 1e-4
   pct_start: 0.2
 ```
 
-### Advanced Physics Configuration
+### 2.2 Advanced Physics Configuration
+
+The following is the optimal configuration validated in the superiority benchmark:
 
 ```yaml
 model:
   physics_config:
-    # Embedding
+    # Embedding (LINEAR MODE - superior for generalization)
     embedding:
-      type: functional    # O(1) w.r.t. vocab size
-      mode: binary        # Binary coordinate encoding
+      type: functional    # O(1) with respect to vocabulary size
+      mode: linear        # Linear mode - critical for O(1) generalization
       coord_dim: 16
     
-    # Readout
+    # Readout (IMPLICIT MODE - holographic alignment)
     readout:
-      type: binary        # Hard-threshold decoder
+      type: implicit      # Implicit readout - the latent state IS the answer
     
     # Active Inference
     active_inference:
       enabled: true
+      dynamic_time:
+        enabled: true
       reactive_curvature:
         enabled: true
-        plasticity: 0.05
+        plasticity: 0.2
+      singularities:
+        enabled: true
+        strength: 20.0
+        threshold: 0.8
     
-    # Hyper-Curvature
-    hyper_curvature:
+    # Fractal Resolution
+    fractal:
       enabled: true
+      threshold: 0.5
+      alpha: 0.2
     
     # Stability
     stability:
-      base_dt: 0.3
-      residual_scale: 0.5
+      base_dt: 0.4        # Optimal timestep (0.3-0.5 recommended)
       curvature_clamp: 5.0
 ```
 
----
+### 2.3 Task-Specific Configuration
 
-## Critical Hyperparameters
+| Task | dim | depth | LR (main) | LR (gates) | Batch |
+|------|-----|-------|-----------|------------|-------|
+| Binary Parity | 128 | 6 | 1e-3 | 1e-2 | 128 |
+| Language | 512 | 12 | 3e-5 | 1e-4 | 16 |
+| Fine-tuning | 256 | 6 | 1e-5 | 1e-4 | 32 |
 
-### Learning Rate
+
+
+## 3. Critical Hyperparameters
+
+### 3.1 Learning Rate
 
 **Recommended Values**:
-- Binary tasks: `1e-4`
-- Language modeling: `3e-5` to `1e-4`
-- Fine-tuning: `1e-5`
 
-**Sensitivity**: Manifold models are **highly sensitive** to learning rate.
-- Too high (>3e-4): Divergence or oscillation
-- Too low (<1e-5): Slow convergence (>10K steps)
+| Task | LR (weights) | LR (gates) |
+|------|--------------|------------|
+| Binary tasks | 1e-3 | 1e-2 |
+| Language modeling | 3e-5 | 1e-4 |
+| Fine-tuning | 1e-5 | 1e-4 |
+
+**Sensitivity**: MANIFOLD models are **highly sensitive** to learning rate.
+
+| LR | Behavior |
+|-----|----------------|
+| >3e-4 | Diverges or oscillates |
+| 1e-4 | Optimal for binary tasks |
+| 3e-5 | Optimal for language |
+| <1e-5 | Slow convergence (>10K steps) |
 
 **Finding Optimal LR**:
+
 ```python
 from torch.optim.lr_scheduler import LRFinder
 
@@ -134,9 +175,9 @@ lr_finder.range_test(train_loader, end_lr=1e-2, num_iter=100)
 lr_finder.plot()  # Look for steepest descent
 ```
 
-### Gradient Clipping
+### 3.2 Gradient Clipping
 
-**Required**: `max_norm=0.05` (tighter than standard 0.1-1.0)
+**Required**: `max_norm=0.05` (stricter than standard 0.1-1.0)
 
 ```python
 torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
@@ -144,52 +185,63 @@ torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
 
 **Why**: Geometric updates amplify gradient magnitudes near convergence.
 
-### Integration Timestep (dt)
+### 3.3 Integration Timestep (dt)
 
-**Default**: `0.3` (recommended for most tasks)
+**Default value**: `0.4` (recommended for most tasks)
 
-**Tuning**:
-- Increase (0.5-1.0): Faster training, risk of instability
-- Decrease (0.1-0.2): More stable, slower convergence
+**Adjustment**:
 
-Set via `physics_config['stability']['base_dt']`.
+| dt | Behavior |
+|-----|----------------|
+| 0.1-0.2 | More stable, slower convergence |
+| 0.3-0.4 | **Optimal** - balanced |
+| 0.5-0.6 | Risk of instability |
+| >0.7 | Complete divergence |
 
----
+Set via `physics_config['stability']['base_dt`.
 
-## Optimizer: RiemannianAdam
 
-### Why Required
+
+## 4. Optimizer: RiemannianAdam
+
+### 4.1 Why It Is Required
 
 Standard Adam performs Euclidean updates that violate manifold constraints, causing "Euclidean drift":
-- Symptom: Loss oscillates chaotically (1.0 → 0.2 → 1.0)
-- Solution: Use RiemannianAdam with retraction
 
-### Configuration
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Loss oscillates chaotically | Standard Adam | Use RiemannianAdam |
+| Diverges after ~100 steps | Geometric drift | RiemannianAdam with retraction |
+
+### 4.2 Recommended Configuration
 
 ```python
 from gfn.optim import RiemannianAdam
 
 optimizer = RiemannianAdam(
     model.parameters(),
-    lr=1e-4,                    # Lower than standard models
-    betas=(0.9, 0.999),         # Standard Adam betas
+    lr=1e-4,              # Lower than standard models
+    betas=(0.9, 0.999),   # Standard Adam betas
     eps=1e-8,
-    weight_decay=1e-4,          # Decoupled weight decay
-    retraction='normalize',     # 'normalize', 'cayley', 'euclidean'
-    max_norm=10.0               # Manifold bound
+    weight_decay=1e-4,    # Decoupled weight decay
+    retraction='normalize',  # 'normalize', 'cayley', 'euclidean'
+    max_norm=10.0         # Manifold bound
 )
 ```
 
-**Retraction Types**:
-- `'normalize'`: Projects weights onto bounded sphere (recommended)
-- `'cayley'`: Orthogonal retraction (experimental)
-- `'euclidean'`: Disables retraction (not recommended)
+### 4.3 Retraction Types
 
----
+| Type | Description | Use Case |
+|------|-------------|-------------|
+| `'normalize'` | Project weights to bounded sphere | **Recommended** |
+| `'cayley'` | Orthogonal retraction (experimental) | Square matrices |
+| `'euclidean'` | Disable retraction (not recommended) | Debugging |
 
-## Learning Rate Schedules
 
-### OneCycleLR (Recommended)
+
+## 5. Learning Rate Schedules
+
+### 5.1 OneCycleLR (Recommended)
 
 ```python
 from torch.optim.lr_scheduler import OneCycleLR
@@ -209,10 +261,11 @@ for batch in dataloader:
 ```
 
 **Benefits**:
-- Fast warm-up prevents early instability
-- Cosine annealing aids convergence
 
-### Alternative: ReduceLROnPlateau
+- Fast warm-up prevents early instability
+- Cosine annealing helps convergence
+
+### 5.2 Alternative: ReduceLROnPlateau
 
 ```python
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -220,8 +273,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 scheduler = ReduceLROnPlateau(
     optimizer,
     mode='min',
-    factor=0.5,      # Halve LR on plateau
-    patience=10,      # Wait 10 epochs
+    factor=0.5,      # Halve LR
+    patience=10,     # Wait 10 epochs
     threshold=1e-4
 )
 
@@ -229,24 +282,25 @@ scheduler = ReduceLROnPlateau(
 scheduler.step(val_loss)
 ```
 
----
 
-## Loss Functions
 
-### Binary Cross-Entropy (Binary Readout)
+## 6. Loss Functions
+
+### 6.1 ToroidalDistanceLoss (for toroidal tasks)
 
 ```python
-criterion = torch.nn.BCEWithLogitsLoss()
+from gfn.losses import ToroidalDistanceLoss
 
-# Compute loss
+criterion = ToroidalDistanceLoss()
+
+# For parity task
 logits, _, _ = model(x)  # [batch, seq, coord_dim]
-target_bits = get_binary_targets(y)  # [batch, seq, coord_dim]
-loss = criterion(logits, target_bits)
+loss = criterion(logits, targets_angle.unsqueeze(-1).expand_as(logits))
 ```
 
-**Use When**: `physics_config['readout']['type'] == 'binary'`
+**Use when**: `physics_config['readout']['type'] == 'implicit'`
 
-### Cross-Entropy (Standard Readout)
+### 6.2 Cross-Entropy (Standard Readout)
 
 ```python
 criterion = torch.nn.CrossEntropyLoss()
@@ -256,52 +310,114 @@ logits, _, _ = model(x)  # [batch, seq, vocab]
 loss = criterion(logits.view(-1, vocab_size), y.view(-1))
 ```
 
-**Use When**: `physics_config['readout']['type'] == 'standard'`
+**Use when**: `physics_config['readout']['type'] == 'standard'`
 
-### Custom: Hamiltonian Regularization (Experimental)
+### 6.3 Hamiltonian Regularization (Experimental)
 
 ```python
-# Penalize energy drift
-energy_loss = torch.mean((v_final.norm(dim=-1) - v_initial.norm(dim=-1))**2)
-total_loss = task_loss + 0.01 * energy_loss
+from gfn.losses import hamiltonian_loss, geodesic_regularization
+
+# Energy loss
+loss_ham = hamiltonian_loss(
+    v_sequence,
+    states=x_sequence,
+    metric_fn=metric_fn,
+    lambda_h=0.01
+)
+
+# Geodesic regularization
+loss_geo = geodesic_regularization(
+    christoffels,
+    lambda_g=0.001
+)
+
+total_loss = task_loss + loss_ham + loss_geo
 ```
 
----
 
-## Training Loop (Complete)
+
+## 7. Complete Training Loop
 
 ```python
 import torch
 from torch.utils.data import DataLoader
 from gfn.model import Manifold
 from gfn.optim import RiemannianAdam
+from gfn.losses import ToroidalDistanceLoss
 from torch.optim.lr_scheduler import OneCycleLR
 
+# Optimal configuration
+physics_config = {
+    'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
+    'readout': {'type': 'implicit', 'coord_dim': 16},
+    'active_inference': {
+        'enabled': True,
+        'dynamic_time': {'enabled': True},
+        'reactive_curvature': {'enabled': True, 'plasticity': 0.2},
+        'singularities': {'enabled': True, 'strength': 20.0, 'threshold': 0.8}
+    },
+    'fractal': {'enabled': True, 'threshold': 0.5, 'alpha': 0.2},
+    'topology': {'type': 'torus'},
+    'stability': {'base_dt': 0.4}
+}
+
 # Setup
-model = Manifold(...).cuda()
-optimizer = RiemannianAdam(model.parameters(), lr=1e-4, max_norm=10.0)
-criterion = torch.nn.CrossEntropyLoss()
+model = Manifold(
+    vocab_size=2,
+    dim=128,
+    depth=6,
+    heads=4,
+    integrator_type='leapfrog',
+    physics_config=physics_config,
+    impulse_scale=80.0,
+    holographic=True
+).cuda()
+
+# Optimizer with differentiated rates
+optimizer = RiemannianAdam([
+    {'params': [p for n, p in model.named_parameters()
+                if not any(x in n for x in ['x0', 'v0', 'impulse_scale', 'gate'])],
+     'lr': 1e-3, 'weight_decay': 1e-4},
+    {'params': [p for n, p in model.named_parameters()
+                if any(x in n for x in ['x0', 'v0', 'impulse_scale', 'gate'])],
+     'lr': 1e-2, 'weight_decay': 0}
+])
+
+criterion = ToroidalDistanceLoss()
 
 max_epochs = 100
 total_steps = max_epochs * len(train_loader)
-scheduler = OneCycleLR(optimizer, max_lr=1e-4, total_steps=total_steps)
+scheduler = OneCycleLR(optimizer, max_lr=2e-3, total_steps=total_steps)
 
 # Training
 for epoch in range(max_epochs):
     model.train()
-    for batch_idx, (x, y) in enumerate(train_loader):
+    for batch_idx, batch in enumerate(train_loader):
+        x, y = batch
         x, y = x.cuda(), y.cuda()
         
         # Forward
         optimizer.zero_grad()
-        logits, _, _ = model(x)
-        loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+        output = model(x, collect_christ=False)
+        x_pred = output[0] if isinstance(output, tuple) else output
+        
+        loss = criterion(x_pred, y.float().unsqueeze(-1).expand_as(x_pred))
+        
+        # Physics losses (optional)
+        loss_phy = 0.0
+        if isinstance(output, tuple) and len(output) >= 6:
+            christoffels = output[2]
+            if christoffels and len(christoffels) > 0:
+                loss_phy = geodesic_regularization(None, christoffels, lambda_g=0.001)
+        
+        total_loss = loss + loss_phy
         
         # Backward
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.05)
-        optimizer.step()
-        scheduler.step()
+        if not torch.isnan(total_loss):
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
         
         # Logging
         if batch_idx % 100 == 0:
@@ -309,35 +425,33 @@ for epoch in range(max_epochs):
     
     # Validation
     model.eval()
-    val_loss = 0.0
-    with torch.no_grad():
-        for x, y in val_loader:
-            x, y = x.cuda(), y.cuda()
-            logits, _, _ = model(x)
-            val_loss += criterion(logits.view(-1, vocab_size), y.view(-1))
-    print(f"Epoch {epoch}, Val Loss: {val_loss/len(val_loader):.4f}")
+    val_acc = evaluate(model, val_loader)
+    print(f"Epoch {epoch}, Val Acc: {val_acc:.2%}")
     
     # Checkpoint
     torch.save({
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
         'loss': loss,
     }, f'checkpoint_epoch_{epoch}.pth')
 ```
 
----
 
-## Convergence Monitoring
 
-### Key Metrics
+## 8. Convergence Monitoring
 
-1. **Task Loss**: Should decrease monotonically
-2. **Gradient Norm**: Should stabilize (not collapse to 0)
-3. **Velocity Norm**: Should remain bounded (not explode)
-4. **Accuracy**: Should increase steadily
+### 8.1 Key Metrics
 
-### Diagnostic Plots
+| Metric | Expected Behavior |
+|--------|------------------------|
+| Task Loss | Monotonically decreasing |
+| Gradient Norm | Stable (not collapsing to 0) |
+| Velocity Norm | Bounded (not exploding) |
+| Accuracy | Constantly increasing |
+
+### 8.2 Diagnostic Plots
 
 ```python
 import matplotlib.pyplot as plt
@@ -346,9 +460,10 @@ import matplotlib.pyplot as plt
 losses = []
 grad_norms = []
 velocity_norms = []
+accuracies = []
 
 # In training loop:
-grad_norm = sum(p.grad.norm() for p in model.parameters())
+grad_norm = sum(p.grad.norm() for p in model.parameters() if p.grad is not None)
 grad_norms.append(grad_norm.item())
 
 _, (_, v), _ = model(x)
@@ -356,41 +471,38 @@ velocity_norms.append(v.norm(dim=-1).mean().item())
 
 # Plot
 plt.figure(figsize=(15, 5))
-plt.subplot(1, 3, 1); plt.plot(losses); plt.title('Loss')
-plt.subplot(1, 3, 2); plt.plot(grad_norms); plt.title('Gradient Norm')
-plt.subplot(1, 3, 3); plt.plot(velocity_norms); plt.title('Velocity Norm')
+plt.subplot(1, 4, 1); plt.plot(losses); plt.title('Loss')
+plt.subplot(1, 4, 2); plt.plot(grad_norms); plt.title('Gradient Norm')
+plt.subplot(1, 4, 3); plt.plot(velocity_norms); plt.title('Velocity Norm')
+plt.subplot(1, 4, 4); plt.plot(accuracies); plt.title('Accuracy')
+plt.tight_layout()
 plt.show()
 ```
 
-### Pathologies
+### 8.3 Pathologies
 
-**Symptom**: Loss oscillates wildly  
-**Cause**: Using standard Adam instead of RiemannianAdam  
-**Fix**: Switch optimizer
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Loss oscillates wildly | Use standard Adam | Switch to RiemannianAdam |
+| Diverges after ~100 steps | Missing velocity normalization or excessive dt | Version v2.6.0+ has automatic normalization |
+| Plateau at ~80% accuracy | Learning rate too low or insufficient capacity | Increase LR or increase dim/depth |
+| NaN gradients | Numerical overflow | Reduce learning rate |
 
-**Symptom**: Model diverges after ~100 steps  
-**Cause**: Missing velocity normalization or excessive dt  
-**Fix**: Ensure v2.5.0+ (has automatic normalization), or reduce dt
 
-**Symptom**: Plateau at ~80% accuracy  
-**Cause**: Learning rate too low or insufficient model capacity  
-**Fix**: Increase LR or increase dim/depth
 
----
+## 9. Distributed Training
 
-## Distributed Training
-
-### Data Parallel (Single Node, Multi-GPU)
+### 9.1 Data Parallel (Single Node, Multi-GPU)
 
 ```python
 model = Manifold(...).cuda()
 if torch.cuda.device_count() > 1:
     model = torch.nn.DataParallel(model)
 
-# Training proceeds as normal
+# Training proceeds normally
 ```
 
-### Distributed Data Parallel (Multi-Node)
+### 9.2 Distributed Data Parallel (Multi-Node)
 
 ```python
 import torch.distributed as dist
@@ -410,18 +522,18 @@ loader = DataLoader(dataset, sampler=sampler, ...)
 
 # Training
 for epoch in range(epochs):
-    sampler.set_epoch(epoch)  # Shuffle across ranks
+    sampler.set_epoch(epoch)  # Shuffle between ranks
     for batch in loader:
         train_step(batch)
 ```
 
----
 
-## Memory Optimization
 
-### Mixed Precision (FP16/BF16)
+## 10. Memory Optimization
 
-**Status**: Experimental (stability under testing)
+### 10.1 Mixed Precision (FP16/BF16)
+
+**Status**: Experimental (stability being tested)
 
 ```python
 from torch.cuda.amp import autocast, GradScaler
@@ -442,7 +554,7 @@ for x, y in dataloader:
     scaler.update()
 ```
 
-### Gradient Accumulation
+### 10.2 Gradient Accumulation
 
 ```python
 accumulation_steps = 4
@@ -458,11 +570,11 @@ for i, (x, y) in enumerate(dataloader):
         optimizer.zero_grad()
 ```
 
----
 
-## Task-Specific Guides
 
-### Binary Reasoning Tasks (Parity, XOR)
+## 11. Task-Specific Guides
+
+### 11.1 Binary Reasoning Tasks (Parity, XOR)
 
 ```yaml
 model:
@@ -471,19 +583,19 @@ model:
   physics_config:
     embedding:
       type: functional
-      mode: binary
+      mode: linear      # Critical for generalization
     readout:
-      type: binary
+      type: implicit   # Holographic alignment
 
 optimizer:
-  lr: 1e-4
+  lr: 1e-3
 
 training:
   batch_size: 128
-  gradient_clip: 0.05
+  gradient_clip: 1.0
 ```
 
-### Language Modeling
+### 11.2 Language Modeling
 
 ```yaml
 model:
@@ -491,7 +603,8 @@ model:
   depth: 12
   physics_config:
     embedding:
-      type: functional  # O(1) vocab scaling
+      type: functional  # O(1) vocabulary scaling
+      mode: linear
     readout:
       type: standard
 
@@ -503,11 +616,11 @@ training:
   gradient_accumulation: 4
 ```
 
----
 
-## Checkpointing
 
-### Save Checkpoint
+## 12. Checkpointing
+
+### 12.1 Save Checkpoint
 
 ```python
 torch.save({
@@ -520,7 +633,7 @@ torch.save({
 }, 'checkpoint.pth')
 ```
 
-### Load Checkpoint
+### 12.2 Load Checkpoint
 
 ```python
 checkpoint = torch.load('checkpoint.pth')
@@ -530,32 +643,41 @@ scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 epoch = checkpoint['epoch']
 ```
 
----
 
-## Troubleshooting
 
-| **Issue** | **Solution** |
-|-----------|-------------|
+## 13. Troubleshooting
+
+| Problem | Solution |
+|----------|----------|
 | Loss oscillates | Use RiemannianAdam |
 | Model diverges | Reduce LR or dt |
-| Slow convergence | Increase LR or check data |
+| Slow convergence | Increase LR or verify data |
 | OOM | Reduce batch size, enable gradient accumulation |
 | Poor generalization | Train longer or increase depth |
+| NaN gradients | Reduce learning rate, verify input data |
 
----
 
-## Best Practices Summary
 
-✅ **Always use RiemannianAdam**  
-✅ **Clip gradients at 0.05**  
-✅ **Start with lr=1e-4, tune from there**  
-✅ **Use OneCycleLR scheduler**  
-✅ **Monitor velocity norms for stability**  
-✅ **Save checkpoints frequently**  
-✅ **Validate on held-out data**  
+## 14. Best Practices Summary
 
----
+| Practice | Description |
+|----------|-------------|
+| ✓ Always use RiemannianAdam | Prevents Euclidean drift |
+| ✓ Clip gradients to 0.05-1.0 | Numerical stability |
+| ✓ Start with lr=1e-4 (binary) | Tune from there |
+| ✓ Use OneCycleLR scheduler | Warm-up and annealing |
+| ✓ Monitor velocity norms | Detect instability |
+| ✓ Save checkpoints frequently | Recovery from failures |
+| ✓ Validate on held-out data | Detect overfitting |
+| ✓ Use linear mode in embedding | Superior generalization |
 
-**Document Version**: 2.6.0  
-**Last Updated**: January 20, 2026  
-**Status**: Production-Ready
+
+
+**Document Version**: 2.6.2  
+**Last Update**: January 27, 2026  
+**Status**: Production Ready
+
+For API reference, see [API.md](API.md).  
+For architecture details, see [ARCHITECTURE.md](ARCHITECTURE.md).  
+For benchmarks, see [BENCHMARKS.md](BENCHMARKS.md).  
+For theoretical foundations, see [PHYSICS.md](PHYSICS.md).

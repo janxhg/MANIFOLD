@@ -16,9 +16,9 @@ def visualize_gating(model_path, test_str="88+11="):
     model = Manifold(vocab_size, dim=128, depth=4, rank=64).to(device)
     try:
         model.load_state_dict(torch.load(model_path, map_location=device))
-        print(f"Loaded model from {model_path}")
+        print(f"[GFN] Loaded model from {model_path}")
     except:
-        print("Could not load weights, using random model for visualization.")
+        print("[GFN:WARN] Could not load weights, using random model for visualization.")
     
     model.eval()
     
@@ -66,7 +66,7 @@ def visualize_gating(model_path, test_str="88+11="):
     
     save_path = "gating_visualization.png"
     plt.savefig(save_path)
-    print(f"Visualization saved to {save_path}")
+    print(f"[GFN] Visualization saved to {save_path}")
     plt.show()
 
 if __name__ == "__main__":
