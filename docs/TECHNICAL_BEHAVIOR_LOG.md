@@ -4,7 +4,7 @@
 **Subject:** Operational Mechanics of the Cognitive Manifold  
 **Purpose:** To explain *what happens* inside the engine when specific conditions are met, serving as a guide for debugging non-linear behaviors.
 
----
+
 
 ## 1. DYNAMICS OF UNCERTAINTY (The Reactive Geometry)
 
@@ -17,7 +17,7 @@
 4.  **Outcome:** The particle experiences massive G-force drag. It is forced to spiral inward and slow down.
 **Technical Note:** This is essentially an automatic "Learning Rate Annealing" built into the physics. You don't need to clip gradients; the geometry clips the motion itself.
 
----
+
 
 ## 2. DYNAMICS OF MEMORY (The Thermodynamic Gate)
 
@@ -39,7 +39,7 @@
 4.  **Outcome:** The old momentum (Old Memory) is effectively erased (stopped) to allow the new impulse to define the new trajectory.
 **Analogy:** You must brake the car before making a sharp 90-degree turn.
 
----
+
 
 ## 3. DYNAMICS OF LOGIC (The Fractal Zoom)
 
@@ -52,7 +52,7 @@
 4.  **Outcome:** The particle performs fine-grained orbital corrections inside the sub-step.
 **Visual Effect:** In the macro-view, the particle appears to "teleport" or "snap" to the correct logical value.
 
----
+
 
 ## 4. DYNAMICS OF TRUTH (Holographic Alignment)
 
@@ -64,7 +64,7 @@
 3.  **Result:** The gradient points *directly* along the manifold surface towards the truth.
 4.  **Outcome:** Unlike Softmax (which just suppresses other options), this forces the particle to physically *travel* to the correct concept. A "hallucination" in this system isn't a wrong probability; it's a particle in the wrong place.
 
----
+
 
 ## 5. DYNAMICS OF STABILITY (The Integrator Limits)
 
@@ -86,7 +86,7 @@
 4.  **Outcome:** The next XOR operation assumes "1" but physically receives "1.03". This noise compounds until the logic flips.
 **Counter-Measure:** Potential Wells (Magnets) at $0, \pi$ "snap" the particle back to the grid, resetting error to zero.
 
----
+
 
 ## 6. DYNAMICS OF OPTIMIZATION (The Gradient Flow)
 
@@ -99,7 +99,7 @@
 4.  **Outcome:** The particle is ejected from the manifold.
 **Safety:** We apply strict **Gradient Clipping (0.05)**. In this universe, nothing is allowed to accelerate too fast.
 
----
+
 
 ## 7. DYNAMICS OF TIME (The Integrator Choice)
 
@@ -119,7 +119,7 @@
 3.  **Result:** "Bullet Time". The physics engine slows down to resolve the complex interaction.
 4.  **Outcome:** Higher accuracy where it matters, lower compute where it doesn't.
 
----
+
 
 ## 8. DYNAMICS OF COUPLING (Structural Failures)
 
@@ -141,7 +141,7 @@
 4.  **Outcome:** The signal-to-noise ratio drops. The "thought" is drowned out by the "background radiation" of the unused dimensions.
 **Fix:** Mask unused dimensions or supervise the entire Hilbert space.
 
----
+
 
 ## 9. DYNAMICS OF COMPUTATION (The Implementation Layer)
 
@@ -154,7 +154,7 @@
 4.  **Outcome:** The calculated gradient suggests a path that doesn't exist in the forward reality.
 **Diagnostic:** Compare `loss_fused` vs `loss_python`. If they diverge $>1\%$, switch to Python Checkpointing.
 
----
+
 
 ## 10. DYNAMICS OF REFERENCE FRAMES (The Coordinate System)
 
@@ -166,7 +166,7 @@
 3.  **Result:** The manifold learns a strong bias towards the origin.
 4.  **Outcome:** We must map targets to $\{-1, 1\}$ (or $\{ -\pi/2, \pi/2 \}$). This compels the physics engine to treat both states as active energy wells, ensuring symmetric stability.
 
----
+
 
 ## 11. DYNAMICS OF CALIBRATION (The Tuning Parameters)
 
@@ -193,7 +193,7 @@
 2.  **Then** the particle lacks the raw kinetic energy to climb the potential hill of the manifold.
 3.  **Outcome:** Set `impulse_scale` $\approx 50.0$ (for $dt=0.2$) to ensure "Escape Velocity".
 
----
+
 
 ## 12. DIAGNOSTIC HEURISTICS
 

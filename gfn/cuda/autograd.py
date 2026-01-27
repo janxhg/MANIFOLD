@@ -6,7 +6,7 @@ try:
 except ImportError:
     def apply_boundary_python(x, tid): return x
 
-# Import CUDA_AVAILABLE from ops.py to ensure consistency
+# Import CUDA availability from ops.py
 try:
     from .ops import CUDA_AVAILABLE, gfn_cuda
 except ImportError:
@@ -76,7 +76,7 @@ class LeapfrogFusedFn(Function):
         wf_in = Wf if Wf is not None else torch.empty(0, device=x.device, dtype=x.dtype)
         bf_in = bf if bf is not None else torch.empty(0, device=x.device, dtype=x.dtype)
         
-        # NOTE: Dispatching to gfn_cuda.leapfrog_fused
+        # Call fused kernel
         res = gfn_cuda.leapfrog_fused(x.contiguous(), v.contiguous(), f_in.contiguous(), U.contiguous(), W.contiguous(), wf_in.contiguous(), bf_in.contiguous(), dt, dt_scale, steps, topology, plasticity, R, r)
         return res[0], res[1]
 
@@ -100,7 +100,7 @@ def leapfrog_fused_autograd(x, v, f, U, W, dt, dt_scale, steps, topology=0, Wf=N
     if not CUDA_AVAILABLE or not x.is_cuda: return None
     return LeapfrogFusedFn.apply(x, v, f, U, W, dt, dt_scale, steps, topology, Wf, bf, plasticity, R, r)
 
-# --- NEW INTEGRATORS ---
+# --- New integrators ---
 
 class EulerFusedFn(Function):
     @staticmethod
@@ -110,10 +110,7 @@ class EulerFusedFn(Function):
         ctx.R, ctx.r = R, r
         f_in = f if f is not None else torch.empty(0, device=x.device, dtype=x.dtype)
         
-        # Assuming gfn_cuda.euler_fused exists. If backward not implemented in C++, this is forward-only.
-        # But for training we need backward. 
-        # Fallback: if not implemented in C++, we should use Unfused in Ops.
-        # Here we assume C++ exists.
+        # Forward relies on CUDA kernel; ops fallback handles missing support
         return gfn_cuda.euler_fused(x.contiguous(), v.contiguous(), f_in.contiguous(), U.contiguous(), W.contiguous(), dt, dt_scale, steps, topology, R, r)
 
     @staticmethod
@@ -122,15 +119,13 @@ class EulerFusedFn(Function):
         dt, dt_scale, steps, topology = ctx.dt, ctx.dt_scale, ctx.steps, ctx.topology
         R, r = ctx.R, ctx.r
         
-        # We REPLAY the forward to get intermediates or just use the chain rule 
-        # for a simple Euler step. Since we only saved x, v at start, 
-        # we need to re-step to get x_t for Christoffel backward.
+        # Replay the forward to recover intermediates for gradients
         
         curr_x, curr_v = x.detach(), v.detach()
         f_in = f if f is not None else torch.zeros_like(x)
         h = dt * dt_scale
         
-        # We need the trajectory to compute gradients in reverse
+        # Store trajectory for reverse pass
         x_history = [curr_x.clone()]
         v_history = [curr_v.clone()]
         
@@ -144,7 +139,7 @@ class EulerFusedFn(Function):
                 x_history.append(curr_x.clone())
                 v_history.append(curr_v.clone())
         
-        # Backward Pass (Adjoint Method)
+        # Adjoint-style backward pass
         gx, gv = grad_xn, grad_vn
         gf = torch.zeros_like(f_in) if f is not None else None
         gU = torch.zeros_like(U)
@@ -153,19 +148,13 @@ class EulerFusedFn(Function):
         for t in reversed(range(steps)):
             xt, vt = x_history[t], v_history[t]
             
-            # x_{t+1} = x_t + h * v_t  =>  gx_t += gx_{t+1}, gv_t += h * gx_{t+1}
-            # v_{t+1} = v_t + h * (f_t - gamma(x_t, v_t))
-            
-            # v update gradient:
-            # gv_t += gv_{t+1}
-            # g_acc = h * gv_{t+1}
+            # v update gradient
             g_acc = h * gv
             
-            # acc = f - gamma => gf += g_acc, g_gamma = -g_acc
+            # acc = f - gamma
             if gf is not None: gf += g_acc
             
             # gamma backward
-            # grads = [gv, gU, gW, gx, gV]
             gamma_grads = gfn_cuda.christoffel_backward(-g_acc.contiguous(), vt, U, W, xt, None, 0.0, 1.0, 1.0, topology, R, r)
             
             gv = gv + gamma_grads[0]
@@ -173,11 +162,8 @@ class EulerFusedFn(Function):
             gW = gW + gamma_grads[2]
             gx = gx + gamma_grads[3]
             
-            # x update gradient:
-            # x_{t+1} = x_t + h * v_t
-            # gx_t += gx_{t+1}, gv_t += h * gx_{t+1}
+            # x update gradient
             gv = gv + h * gx
-            # gx = gx (stays same as gx_{t+1})
             
         return gx, gv, gf, gU, gW, None, None, None, None, None, None
 
@@ -360,7 +346,7 @@ class RecurrentManifoldFusedFn(Function):
                 mix_x=None, mix_v=None, W_forget_stack=None, W_input_stack=None, b_forget_stack=None, 
                 W_potential_stack=None, b_potential_stack=None, 
                 topology=0, R=2.0, r=1.0):
-        # Optional Tensor Handling for Autograd
+        # Placeholders for optional tensors
         mx = mix_x if mix_x is not None else torch.empty(0, device=x.device, dtype=x.dtype)
         mv = mix_v if mix_v is not None else torch.empty(0, device=x.device, dtype=x.dtype)
         wf = W_forget_stack if W_forget_stack is not None else torch.empty(0, device=x.device, dtype=x.dtype)
@@ -389,15 +375,7 @@ class RecurrentManifoldFusedFn(Function):
 
     @staticmethod
     def backward(ctx, grad_xf, grad_vf, grad_seq, grad_reg):
-        # Unpack checkpointed sequences and initial states
         x0, v0, f_seq, U, W, dt_scales, forget, mix_x, mix_v, wf, wi, bf, wp, bp, x_seq, v_seq = ctx.saved_tensors
-        
-        # We need to assume gfn_cuda.recurrent_manifold_backward signature has expanded or we pass dummies?
-        # Using *args or similar might be safer if we are unsure, but we need return logic.
-        # Assuming C++ Side is updated or we just pass them if it accepts.
-        # If C++ signature hasn't changed, this call will fail.
-        # But User edited ops.py to include them in the call to autograd, so likely C++ forward is ready.
-        # Backward might be ready too?
         
         grads = gfn_cuda.recurrent_manifold_backward(
             grad_x_seq=grad_seq.contiguous() if grad_seq is not None else torch.zeros_like(x_seq),

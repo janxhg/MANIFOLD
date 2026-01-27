@@ -100,7 +100,8 @@ def run_free_motion_check():
     
     # Disable all forces
     physics_config = {
-        'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
+        'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
+        'readout': {'type': 'implicit', 'coord_dim': 16},
         'active_inference': {'enabled': False},
         'singularities': {'enabled': False},
         'fractal': {'enabled': False}

@@ -6,15 +6,12 @@ from .readout import ImplicitReadout
 
 class Manifold(nn.Module):
     """
-    MANIFOLD: Multi-scale Adaptive Neural Inference via Flow On Learned Dynamics
+    Manifold sequence model that evolves (x, v) via geodesic flow.
     
-    A sequence model that evolves hidden states as geodesic flows
-    on a Riemannian manifold. Achieves O(1) memory complexity.
-    
-    Architecture:
-        1. Embedding: Token -> Force impulse on manifold
-        2. Dynamics: M-Layers evolve state (x, v) via geodesic flow
-        3. Readout: Position x -> Logits via learned projection
+    Pipeline:
+        1. Embed tokens into forces
+        2. Apply M-Layers to update (x, v)
+        3. Project positions to logits
     
     Args:
         vocab_size: Size of vocabulary
@@ -40,7 +37,6 @@ class Manifold(nn.Module):
         self.physics_config = physics_config or {}
         self.holographic = holographic or self.physics_config.get('holographic', False)
         
-        # Token embedding
         emb_cfg = self.physics_config.get('embedding', {})
         emb_type = emb_cfg.get('type', 'standard')
         
@@ -58,13 +54,11 @@ class Manifold(nn.Module):
         else:
             self.embedding = nn.Embedding(vocab_size, dim)
         
-        # Stack of Multi-Head Manifold Layers
         self.layers = nn.ModuleList()
         for idx in range(depth):
             if use_scan:
                 self.layers.append(ParallelMLayer(dim, heads=heads, physics_config=self.physics_config))
             else:
-                # v0.8.0 Fractal Manifolds
                 if self.physics_config.get('fractal', {}).get('enabled', False):
                     from .layers import FractalMLayer
                     self.layers.append(FractalMLayer(dim, heads=heads, rank=rank, integrator_type=integrator_type, 
@@ -73,7 +67,6 @@ class Manifold(nn.Module):
                     self.layers.append(MLayer(dim, heads=heads, rank=rank, base_dt=base_dt, integrator_type=integrator_type, 
                                              physics_config=self.physics_config, layer_idx=idx, total_depth=depth))
         
-        # Output projection
         readout_cfg = self.physics_config.get('readout', {})
         readout_type = readout_cfg.get('type', 'standard')
         
@@ -81,7 +74,7 @@ class Manifold(nn.Module):
         
         if readout_type == 'implicit' or readout_type == 'binary':
              coord_dim = emb_cfg.get('coord_dim', 16) 
-             # Level 3: Temperature-Annealed Sigmoid MLP
+             # Implicit readout uses temperature-annealed sigmoid MLP
              if self.holographic:
                  self.readout = nn.Identity()
              else:
@@ -89,18 +82,11 @@ class Manifold(nn.Module):
         else:
              self.readout = nn.Linear(dim, vocab_size)
         
-        # 4. Engine Manifest (Professional Log Consolidation)
         self._print_manifest(vocab_size, dim, depth, heads, integrator_type, use_scan)
         
-        # Improved Initialization (Critical for convergence)
-        # Non-zero random init helps early gradient flow
-        # LEVEL 7: MOMENTUM INJECTION
-        # Restart with small random noise to avoid the "Flat Geometry" trap
-        # This provides initial velocity and position for geodesic steering
         self.x0 = nn.Parameter(torch.randn(1, dim) * 0.02)
         self.v0 = nn.Parameter(torch.randn(1, dim) * 0.01)
 
-        # Init weights
         self.apply(self._init_weights)
 
     def _print_manifest(self, vocab_size, dim, depth, heads, integrator, scan):
@@ -131,25 +117,18 @@ class Manifold(nn.Module):
         print(f"[GFN] -----------------------------------\n")
     
     def _init_weights(self, module):
-        # LEVEL 28: DO NOT OVERWRITE specialized functional embedding weights
-        # We check both the module itself and its class name for robustness
         from .embeddings import FunctionalEmbedding
         if isinstance(module, FunctionalEmbedding):
             return
             
-        # Recursive check to prevent overwriting children of FunctionalEmbedding
-        # (like out_proj)
         if hasattr(self, 'embedding') and isinstance(self.embedding, FunctionalEmbedding):
-            # If the module is a parameter or child of self.embedding, skip it
+            # If the module is owned by the embedding, skip it
             emb_params = set(self.embedding.parameters())
             mod_params = set(module.parameters())
             if mod_params.issubset(emb_params) and len(mod_params) > 0:
                 return
 
         if isinstance(module, nn.Linear):
-            # LEVEL 5: READOUT SCALE ALIGNMENT
-            # Readout needs higher variance to overcome temperature annealing
-            # Standard manifold weights use 0.02, but Readout uses 0.1
             std = 0.1 if hasattr(module, 'is_readout') else 0.02
             nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
@@ -162,7 +141,7 @@ class Manifold(nn.Module):
     
     def forward(self, input_ids=None, attention_mask=None, state=None, force_manual=None, collect_christ=False):
         """
-        Forward pass through the geodesic flow.
+        Forward pass through geodesic flow.
         
         Args:
             input_ids: Token indices [batch, seq_len]
@@ -181,10 +160,8 @@ class Manifold(nn.Module):
             batch_size, seq_len, _ = all_forces.shape
         else:
             batch_size, seq_len = input_ids.shape
-            # Pre-compute all token embeddings (forces)
             all_forces = self.embedding(input_ids)  # [batch, seq_len, dim]
         
-        # Initialize state from learnable parameters or provided state
         if state is None:
             x = self.x0.expand(batch_size, -1)
             v = self.v0.expand(batch_size, -1)
@@ -192,82 +169,61 @@ class Manifold(nn.Module):
             x, v = state
         
         if self.use_scan:
-            # === PARALLEL MODE (SCAN) ===
-            # Process entire sequence at once using the parallel scan algorithm.
-            # The input 'all_forces' acts as the driving force sequence for the layers.
-            
-            # Initial position state (broadcast to batch)
             x_scan = self.x0.expand(batch_size, seq_len, -1)
             
             curr_input = all_forces # [B, L, D]
-            all_christoffels = [] # To be populated if needed
+            all_christoffels = []
             
             for layer in self.layers:
-                # Parallel Layer takes full sequence of inputs
-                # We treat the input 'curr_input' as the driving force sequence
                 out_x, out_v, out_ctx, layer_christoffels = layer(None, None, force=curr_input)
                 all_christoffels.extend(layer_christoffels)
                 
-                # Update input for next layer (stacking manifold layers)
-                # Next layer is driven by the position/state of previous layer
                 curr_input = out_x # Use position as input to next layer
                 
-            # Final Readout
-            # [batch, seq_len, dim]
             x_final = curr_input 
             if not self.holographic:
                 x_final = self.readout_norm(x_final)
             logits = self.readout(x_final) # [batch, seq_len, vocab_size]
             
-            # Return last state for compatibility?
-            # Just return zeros or last element
             return logits, (x_final[:, -1], None), all_christoffels
 
         else:
-            # === SEQUENTIAL MODE (LOOP) ===
-            # Prepare attention mask
             if attention_mask is not None:
                 mask = attention_mask.unsqueeze(-1).float()  # [batch, seq_len, 1]
             else:
                 mask = torch.ones(batch_size, seq_len, 1, device=all_forces.device)
             
-            # Process sequence token by token (recurrent dynamics)
             logits_list = []
             all_christoffels = []
             
-            # Context state
             context = None
             
-            # LEVEL 28: Fused Toroidal support.
-            # We temporarily fallback to Python sequence loop for Torus to ensure 100% gradient accuracy
-            # while CUDA backward kernels (dL/dx) are being synchronized in the workshop.
+            # Torus uses Python loop to keep gradients stable with current CUDA backward
             topo_cfg = self.physics_config.get('topology', {})
             topology_type = topo_cfg.get('type', 'euclidean')
             is_torus = (topology_type == 'torus')
             
-            # can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ) # Full Fusion
-            # Disable Recurrent Fusion for Leapfrog (it uses Symplectic Euler, while Leapfrog uses Kick-Drift-Kick)
+            # Disable recurrent fusion for Leapfrog (different stepping scheme)
             can_fuse = (not self.use_scan and self.depth > 0 and not collect_christ and self.integrator_type != 'leapfrog')
             
             if can_fuse:
                 try:
                     from gfn.cuda.ops import recurrent_manifold_fused, CUDA_AVAILABLE
                     if CUDA_AVAILABLE:
-                        # Stack parameters for ALL heads across ALL layers
-                        # The kernel expects: [Layer * Heads, Dim, Rank]
+                        # Stack per-head parameters across layers
                         U_list = []
                         W_list = []
-                        # LEVEL 26: CLUTCH STACKS
+                        # Clutch gate stacks
                         W_forget_list = []
                         W_input_list = []
                         b_forget_list = []
                         
-                        # LEVEL 30: SINGULARITY STACKS
+                        # Singularity gate stacks
                         W_potential_list = []
                         b_potential_list = []
                         
                         for layer in self.layers:
-                            # Handle Fractal Wrapper
+                                # Handle fractal wrapper
                             target_layer = layer
                             if hasattr(layer, 'macro_manifold'):
                                 target_layer = layer.macro_manifold
@@ -275,7 +231,7 @@ class Manifold(nn.Module):
                             for head_idx in range(self.heads):
                                 head_geo = target_layer.christoffels[head_idx]
                                 
-                                # Analytical Torus uses hardcoded dynamics, matrix-based uses U/W
+                                # Non-torus uses U/W matrices
                                 if not is_torus:
                                     if not hasattr(head_geo, 'U') or not hasattr(head_geo, 'W'):
                                         can_fuse = False
@@ -283,23 +239,23 @@ class Manifold(nn.Module):
                                     U_list.append(head_geo.U)
                                     W_list.append(head_geo.W)
                                 else:
-                                    # Use dummy for stack consistency, kernel ignores these in TORUS mode
+                                    # Dummy placeholders for torus mode
                                     U_list.append(torch.zeros(self.dim // self.heads, 1, device=x.device))
                                     W_list.append(torch.zeros(self.dim // self.heads, 1, device=x.device))
 
-                                # Extract Clutch Params
+                                # Clutch parameters
                                 if hasattr(head_geo, 'forget_gate'):
                                     W_forget_list.append(head_geo.forget_gate.weight)
                                     b_forget_list.append(head_geo.forget_gate.bias)
                                     W_input_list.append(head_geo.input_gate.weight)
                                 else:
-                                    # Fallback for old/other christoffels
+                                    # Fallback for legacy christoffels
                                     h_dim = target_layer.head_dim
                                     W_forget_list.append(torch.zeros(self.dim//self.heads, h_dim, device=x.device))
                                     b_forget_list.append(torch.zeros(self.dim//self.heads, device=x.device))
                                     W_input_list.append(torch.zeros(self.dim//self.heads, h_dim, device=x.device))
                                 
-                                # Extract Singularity Params
+                                # Singularity parameters
                                 if hasattr(head_geo, 'V') and head_geo.V is not None:
                                     W_potential_list.append(head_geo.V.weight)
                                     b_bias = head_geo.V.bias
@@ -308,15 +264,7 @@ class Manifold(nn.Module):
                                     b_potential_list.append(b_bias)
                                 else:
                                     h_dim = target_layer.head_dim
-                                    # Input dim for Potential is 2*dim for Torus, dim for Euclidean
-                                    # But we are in head logic...
-                                    # ToroidalChristoffel gate_input_dim is 2*dim (global dim?)
-                                    # Wait, ToroidalChristoffel is per head?
-                                    # If ToroidalChristoffel is used inside MLayer heads, dim is head_dim.
-                                    # Let's check ToroidalChristoffel init. It takes `dim`.
-                                    # In MLayer: `self.christoffels = nn.ModuleList([ToroidalChristoffel(self.head_dim...)])`
-                                    # So dim is head_dim.
-                                    # Gate input is 2*head_dim.
+                                    # Potential gate uses 2*head_dim for torus
                                     
                                     p_dim = 2 * (self.dim // self.heads) if is_torus else (self.dim // self.heads)
                                     W_potential_list.append(torch.zeros(1, p_dim, device=x.device))
@@ -334,19 +282,19 @@ class Manifold(nn.Module):
                              W_p_stack = torch.stack(W_potential_list)
                              b_p_stack = torch.stack(b_potential_list)
                              
-                             # Use base_dt from the first actual MLayer
+                             # Use base_dt from the first layer
                              first_layer = self.layers[0]
                              if hasattr(first_layer, 'macro_manifold'): first_layer = first_layer.macro_manifold
                              base_dt = first_layer.base_dt
                              
-                             # Mixing Weights (Use Layer 0's projections as standard)
+                             # Use layer 0 mixing weights
                              mix_x = torch.empty(0, device=x.device)
                              mix_v = torch.empty(0, device=x.device)
                              if self.heads > 1 and hasattr(self.layers[0], 'out_proj_x'):
                                      mix_x = self.layers[0].out_proj_x.weight
                                      mix_v = self.layers[0].out_proj_v.weight
                              
-                             # DISPATCH TO FUSED KERNEL
+                             # Dispatch to fused kernel
                              act_inf = self.physics_config.get('active_inference', {})
                              plasticity = act_inf.get('plasticity', 0.0) if act_inf.get('enabled', False) else 0.0
                              
@@ -355,7 +303,7 @@ class Manifold(nn.Module):
                              sing_thresh = sing_cfg.get('threshold', 0.9) if sing_enabled else 1.0
                              sing_strength = sing_cfg.get('strength', 1.0) if sing_enabled else 1.0
                              
-                             # Geometric Radii for Torus
+                             # Torus radii
                              major_R = topo_cfg.get('major_radius', 2.0)
                              minor_r = topo_cfg.get('minor_radius', 1.0)
 
@@ -374,18 +322,7 @@ class Manifold(nn.Module):
                                  
                                  topology_id = 1 if is_torus else 0
                                  
-                                 # TODO: Update Autograd Wrapper too?
-                                 # For now, we only fixed the FORWARD kernel in C++ binding `recurrent_manifold_fused`
-                                 # Autograd likely needs update.
-                                 # Assuming user only asked for Forward/Inference fix or we should fix autograd too?
-                                 # The prompt was general "implement".
-                                 # I should stick to Forward for now or update Autograd info?
-                                 # Let's pass the new args to Forward.
-                                 
-                                 # NOTE: Autograd wrapper signature mismatch might occur if I don't update `autograd.py`
-                                 # But I only modified `cuda_kernels.cpp`.
-                                 # Let's check `cuda_kernels.cpp` autograd binding...
-                                 # It was NOT modified in the previous step. only `recurrent_manifold_fused_cuda` (Forward).
+                                 # Autograd wrapper receives the same parameter set as forward
                                  res = recurrent_manifold_fused_autograd(
                                      x=x_in, v=v_in, f=all_forces * mask, U=U_stack, W=W_stack, 
                                      dt=base_dt, dt_scales=dt_scales, forget_rates=forget_rates, num_heads=self.heads,
@@ -440,10 +377,10 @@ class Manifold(nn.Module):
             v_seq = []
             x_seq = []
             for t in range(seq_len):
-                # Get force and mask for current timestep
+                # Force for current timestep
                 force = all_forces[:, t] * mask[:, t]
                 
-                # Evolve state through all M-Layers
+                # Evolve state through layers
                 for layer in self.layers:
                     x, v, context, layer_christoffels = layer(x, v, force, context, collect_christ=collect_christ)
                     if collect_christ:
@@ -452,7 +389,7 @@ class Manifold(nn.Module):
                 v_seq.append(v)
                 x_seq.append(x)
                 
-                # Readout: project position to vocabulary logits
+                # Project position to logits
                 out = x
                 if not self.holographic:
                     out = self.readout_norm(x)
@@ -497,14 +434,14 @@ class Manifold(nn.Module):
                 v, _ = torch.topk(next_logit, k)
                 next_logit[next_logit < v[:, [-1]]] = -float('Inf')
             
-            # Top-P (Nucleus)
+            # Top-P (nucleus)
             if p is not None:
                 sorted_logits, sorted_indices = torch.sort(next_logit, descending=True)
                 cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
                 
-                # Remove tokens with cumulative probability above the threshold
+                # Remove tokens above cumulative threshold
                 sorted_indices_to_remove = cumulative_probs > p
-                # Shift the indices to the right to keep also the first token above the threshold
+                # Keep the first token above the threshold
                 sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                 sorted_indices_to_remove[..., 0] = 0
                 

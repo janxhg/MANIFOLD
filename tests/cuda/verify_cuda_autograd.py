@@ -4,7 +4,7 @@ import sys
 import os
 
 # Ensure the project root is in the path
-root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if root not in sys.path:
     sys.path.insert(0, root)
 

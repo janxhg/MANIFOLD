@@ -21,7 +21,7 @@ class ImplicitReadout(nn.Module):
         self.is_torus = (topology == 1)
         
         # MLP to output coordinates
-        # TOROIDAL EMBEDDING: Input is doubled (Sin/Cos)
+        # Toroidal input uses [sin(x), cos(x)]
         in_dim = dim * 2 if self.is_torus else dim
         self.mlp = nn.Sequential(
             nn.Linear(in_dim, dim), 
@@ -29,7 +29,7 @@ class ImplicitReadout(nn.Module):
             nn.Linear(dim, coord_dim)
         )
         
-        # Tag for specialized Level 5 initialization in model.py
+        # Mark readout layers for init scaling in model.py
         for module in self.mlp.modules():
             if isinstance(module, nn.Linear):
                 module.is_readout = True
@@ -50,19 +50,16 @@ class ImplicitReadout(nn.Module):
             bits_soft: [batch, seq, coord_dim] in range [0, 1]
         """
         if self.is_torus:
-            # LEVEL 16: TOROIDAL EMBEDDING
             # Map x -> [sin(x), cos(x)] to enforce periodicity
             x_emb = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
         else:
             x_emb = x
         
-        # LEVEL 20: SIGNAL BOOST
-        # 10.0 constant gain provides sharp gradients for BCE convergence.
+        # Gain provides sharper gradients for BCE
         logits = self.mlp(x_emb) * 10.0 # [batch, seq, coord_dim]
         
         return logits
-        # LEVEL 19 REMOVED INFERENCE BRANCH (Moved to generate/testing)
-        # return torch.sigmoid(logits)
+        # Sigmoid is applied by the caller when needed
     
     def update_step(self):
         """Call this after each optimizer step to update temperature schedule."""

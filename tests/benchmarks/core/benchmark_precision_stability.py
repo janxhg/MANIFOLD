@@ -134,8 +134,8 @@ def run_precision_benchmark():
         model = Manifold(
             vocab_size=2, dim=128, depth=6, heads=4,
             physics_config={
-                'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
-                'readout': {'type': 'binary'},
+                'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
+                'readout': {'type': 'implicit', 'coord_dim': 16},
                 'active_inference': {'enabled': True}, # Complex dynamics
                 'stability': {'base_dt': 0.1} # Conservative dt
             }

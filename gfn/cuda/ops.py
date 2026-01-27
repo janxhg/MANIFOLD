@@ -7,8 +7,7 @@ import importlib.util
 import importlib.machinery
 from pathlib import Path
 
-# LEVEL 28: Integrated CUDA Op Pipeline
-# ------------------------------------
+# CUDA op loading and Python fallbacks
 
 CUDA_AVAILABLE = True
 gfn_cuda = None
@@ -23,9 +22,9 @@ def _log_cuda_status():
     global _CUDA_LOG_ONCE
     if not _CUDA_LOG_ONCE:
         if CUDA_AVAILABLE:
-            print(f"[GFN] Engine Status: HARDWARE ACCELERATED (CUDA 12.x | {torch.cuda.get_device_name(0)})")
+            print(f"[GFN] CUDA enabled: {torch.cuda.get_device_name(0)}")
         else:
-            print("[GFN] Engine Status: EMULATED (Python Fallback Mode)")
+            print("[GFN] CUDA disabled: using Python fallbacks")
         _CUDA_LOG_ONCE = True
 
 def _prepare_dll_paths():
@@ -88,14 +87,13 @@ if CUDA_AVAILABLE:
 
 def christoffel_fused(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0, topology=0, R=2.0, r=1.0):
     """
-    Modular Riemannian Christoffel Symbol Projection.
-    Supports Active Inference Multipliers and Periodic Toroidal Features.
+    Christoffel projection with optional plasticity and periodic features.
     """
     if CUDA_AVAILABLE and v.is_cuda:
         from .autograd import christoffel_fused_autograd
         return christoffel_fused_autograd(v, U, W, x, V_w, plasticity, sing_thresh, sing_strength, topology, R, r)
     
-    # Python Fallback (Vectorized)
+    # Python fallback (vectorized)
     # print("[GFN:WARN] Fallback to Python implementation for Christoffel Fused")
     # h = U^T v
     h = torch.matmul(v, U) # [B, R]
@@ -108,22 +106,20 @@ def christoffel_fused(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0
         M *= (1.0 + plasticity * torch.tanh(E))
     
     if x is not None and V_w is not None:
-        # Periodic Singularity logic in Python fallback
+        # Periodic singularity logic in Python fallback
         if topology == 1: pot = torch.sum(torch.sin(x) * V_w, dim=-1, keepdim=True)
         else: pot = torch.sum(x * V_w, dim=-1, keepdim=True)
         gate = torch.sigmoid(pot)
         soft_m = torch.sigmoid(10.0 * (gate - sing_thresh))
         M = M * (1.0 + (sing_strength - 1.0) * soft_m)
 
-    # Python Fallback for Torus needs specialised analytical logic 
-    # if we want exact parity, otherwise use matrices.
-    # Currently python fallback uses matrices. Let's keep it for now but note it.
+    # Python fallback uses matrix formulation for both topologies
     gamma = torch.matmul(h*h, W.t()) * S * M
     return 20.0 * torch.tanh(gamma / 20.0)
 
 def reactive_christoffel(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=1.0, sing_strength=1.0, topology=0, R=2.0, r=1.0):
     """
-    Top-Level Geometry Dispatcher.
+    Geometry dispatcher: tries reactive kernel, falls back to christoffel_fused.
     """
     if CUDA_AVAILABLE and v.is_cuda and v.dim() == 2:
         from .autograd import reactive_christoffel_autograd
@@ -134,8 +130,7 @@ def reactive_christoffel(v, U, W, x=None, V_w=None, plasticity=0.0, sing_thresh=
 
 def leapfrog_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0, Wf=None, bf=None, plasticity=0.0, R=2.0, r=1.0):
     """
-    Fused Symplectic Integrator Step (Python Fallback).
-    Matches CUDA Kernel v5.0 (Strang Splitting Style).
+    Fused symplectic integrator step with Python fallback.
     """
     if CUDA_AVAILABLE and x.is_cuda and x.dim() == 2:
         from .autograd import leapfrog_fused_autograd
@@ -146,23 +141,22 @@ def leapfrog_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0, Wf=None, bf=N
         res = leapfrog_fused_autograd(x, v, f, U, W, dt, dt_scale, steps, topology=topology, Wf=Wf, bf=bf, plasticity=plasticity, R=R, r=r)
         if res is not None: return res
     
-    # Python Fallback (Vectorized)
+    # Python fallback (vectorized)
     eff_dt = dt * (float(dt_scale) if not isinstance(dt_scale, torch.Tensor) else dt_scale)
     h = 0.5 * eff_dt
     curr_x, curr_v = x, v
     
     for _ in range(steps):
-        # 1. Friction Coefficient
+        # 1. Friction coefficient
         mu = torch.zeros_like(v)
         if Wf is not None and bf is not None:
-             # Legacy/Clutch logic alignment
              feat = curr_x
              if topology == 1: # Torus
                   feat = torch.cat([torch.sin(curr_x), torch.cos(curr_x)], dim=-1)
              gate = torch.matmul(feat, Wf.t()) + bf
              mu = torch.sigmoid(gate) * 5.0 # Max 5.0 dampen
              
-        # 2. Kick 1 (Half Step) with Implicit Friction
+        # 2. Kick 1 (Half Step) with implicit friction
         gamma = christoffel_fused(curr_v, U, W, curr_x, None, plasticity, 1.0, 1.0, topology, R, r)
         force_val = f if f is not None else 0.0
         # Implicit update: v_next = (v_prev + h*(F - gamma)) / (1 + h*mu)
@@ -174,8 +168,7 @@ def leapfrog_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0, Wf=None, bf=N
              from gfn.geometry.boundaries import apply_boundary_python
              curr_x = apply_boundary_python(curr_x, 1)
              
-        # 4. Kick 2 (Half Step) with Implicit Friction at new position
-        # Re-evaluate friction at new position for consistency
+        # 4. Kick 2 (Half Step) with implicit friction at new position
         if Wf is not None and bf is not None:
              feat = curr_x
              if topology == 1:
@@ -215,9 +208,6 @@ def verlet_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0, R=2.0, r=1.0):
 def yoshida_fused(x, v, f, U, W, dt, dt_scale, steps, topology=0, R=2.0, r=1.0):
     # Yoshida 4th Order Symplectic
     if CUDA_AVAILABLE and x.is_cuda:
-        # Assuming binding exists
-        # from .autograd import yoshida_fused_autograd
-        # return yoshida_fused_autograd(...)
         pass
     return None
 
@@ -237,7 +227,7 @@ def recurrent_manifold_fused(x, v, f, U_stack, W_stack, dt, dt_scales, forget_ra
                              Wp=None, bp=None, # NEW ARGS
                              topology=0, R=2.0, r=1.0):
     """
-    Professional Trajectory Fusion for High-Performance Sequence Training.
+    Fused recurrent manifold step for sequence training.
     """
     if CUDA_AVAILABLE and x.is_cuda: # Enabled for Torus (Fixed kernels)
         from .autograd import recurrent_manifold_fused_autograd

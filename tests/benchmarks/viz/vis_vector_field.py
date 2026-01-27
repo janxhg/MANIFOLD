@@ -27,7 +27,10 @@ def plot_christoffel_vector_field(checkpoint_path=None):
     
     # 1. Setup
     vocab = "0123456789+-*= "
-    physics_config = {'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16}}
+    physics_config = {
+        'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
+        'readout': {'type': 'implicit', 'coord_dim': 16}
+    }
     model = Manifold(vocab_size=len(vocab), dim=512, depth=1, heads=1, physics_config=physics_config).to(device)
     
     if checkpoint_path and os.path.exists(checkpoint_path):

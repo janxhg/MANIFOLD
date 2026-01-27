@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 
 # Add project root
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 print("="*60)
@@ -35,7 +35,7 @@ except Exception as e:
     sys.exit(1)
 
 def run_kernel_smoke():
-    cmd = [sys.executable, str(PROJECT_ROOT / "tests" / "test_fusion_kernel.py")]
+    cmd = [sys.executable, str(PROJECT_ROOT / "tests" / "cuda" / "test_fusion_kernel.py")]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         print(result.stdout.strip().splitlines()[-1] if result.stdout else "")

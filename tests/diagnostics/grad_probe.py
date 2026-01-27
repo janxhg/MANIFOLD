@@ -23,7 +23,7 @@ def run_probe(seq_len=100, device='cuda'):
     # Init Model (Same config as Superiority Benchmark)
     dim = 128
     physics_config = {
-        'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
+        'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
         'readout': {'type': 'implicit', 'coord_dim': 16},
         'active_inference': {'enabled': True, 'plasticity': 0.1},
         'singularities': {'enabled': True, 'strength': 5.0},

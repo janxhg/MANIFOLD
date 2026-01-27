@@ -157,8 +157,8 @@ def run_arithmetic_benchmark():
         use_scan=False,
         integrator_type='leapfrog',
         physics_config={
-            'embedding': {'type': 'functional', 'mode': 'binary', 'coord_dim': 16},
-            'readout': {'type': 'binary'},
+            'embedding': {'type': 'functional', 'mode': 'linear', 'coord_dim': 16},
+            'readout': {'type': 'implicit', 'coord_dim': 16},
             'active_inference': {'enabled': True, 'reactive_curvature': {'enabled': True, 'plasticity': 0.05}},
             'hyper_curvature': {'enabled': True},
             'stability': {'base_dt': 0.3, 'damping': 0.05, 'residual_scale': 0.5}

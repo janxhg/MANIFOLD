@@ -24,37 +24,24 @@ class LowRankChristoffel(nn.Module):
         self.clamp_val = self.config.get('stability', {}).get('curvature_clamp', 5.0)
         self.is_torus = self.config.get('topology', {}).get('type', '').lower() == 'torus'
         
-        # Gates for Toroidal coordinates require Fourier features [sin(x), cos(x)]
+        # Toroidal gates use Fourier features [sin(x), cos(x)]
         gate_input_dim = 2 * dim if self.is_torus else dim
         
-        # Factors to reconstruct Gamma
-        # U: [dim, rank] - represents the "basis" for the input indices i, j
-        # W: [dim, rank] - represents the "basis" for the output index k (or weighting)
-        # LEVEL 7: CURVATURE INJECTION
-        # Higher initialization (0.2) ensures manifold logic is energetic from step 1
-        # LEVEL 22: FLAT TORUS START (Euclidean Default)
-        # We initialize U, W to ZERO to ensure \Gamma = 0 initially.
-        # This prevents "Metric Noise" from trapping particles.
+        # Initialize U/W to start flat
         self.U = nn.Parameter(torch.zeros(dim, rank))
         self.W = nn.Parameter(torch.zeros(dim, rank))
         
         # Friction coefficient for Conformal Symplectic System
         self.friction = self.config.get('stability', {}).get('friction', 0.05)
         
-        # Position Gate V: dim -> 1 (Scalar gravity well strength)
-        # We start with near-zero weights so initially there are no gravity wells.
+        # Position gate for potential strength, initialized near zero
         self.V = nn.Linear(gate_input_dim, 1, bias=False)
         nn.init.zeros_(self.V.weight)
         
-        # Adaptive Curvature Gate (The Valve): dim -> dim
-        # Learns when to apply curvature vs coasting
+        # Adaptive curvature gate
         self.gate_proj = nn.Linear(gate_input_dim, dim)
         nn.init.zeros_(self.gate_proj.weight)
         nn.init.constant_(self.gate_proj.bias, 2.0) # Start OPEN (sigmoid(2) ~ 0.88)
-        
-        # LEVEL 25: THE CLUTCH (Input-Dependent Friction)
-        # Mechanism to switch between Hamiltonian (Coast) and Aristotelian (Write) regimes.
-        # Friction = sigmoid(W_x * x + W_f * force + bias)
         
         # State component of friction gate
         self.forget_gate = nn.Linear(gate_input_dim, dim)
@@ -64,8 +51,6 @@ class LowRankChristoffel(nn.Module):
         self.input_gate = nn.Linear(dim, dim, bias=False)
         nn.init.normal_(self.input_gate.weight, std=0.01)
         
-        # BIAS INITIALIZATION: 0.0 (Neutral/Semi-Engaged)
-        # Allows gradient descent to push towards +5 (Write) or -5 (Coast) easily.
         nn.init.constant_(self.forget_gate.bias, 0.0) 
         
     def forward(self, v, x=None, force=None, **kwargs):
@@ -75,7 +60,7 @@ class LowRankChristoffel(nn.Module):
         Output represents the effective "Resistance" to motion.
         Acc = F_ext - Output
         """
-        # Try Fused CUDA Kernel first (Placeholder: Kernel needs to support forget_gate)
+        # Use fused CUDA kernel when available
         try:
             from gfn.cuda.ops import lowrank_christoffel_fused, CUDA_AVAILABLE
             if CUDA_AVAILABLE and v.is_cuda and v.dim() == 2:
@@ -83,9 +68,7 @@ class LowRankChristoffel(nn.Module):
                 V_empty = torch.empty(0, device=v.device)
                 gamma_cuda = lowrank_christoffel_fused(v, self.U, self.W, x_empty, V_empty, 0.0, 1.0, 1.0)
                 
-                # Apply friction manually if CUDA kernel doesn't support it yet
                 if x is not None:
-                     # Handle Torus geometry for gate input
                      if self.is_torus:
                          x_in = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
                      else:
@@ -93,9 +76,7 @@ class LowRankChristoffel(nn.Module):
 
                      friction = torch.sigmoid(self.forget_gate(x_in)) * 5.0
                      
-                     # If requested, return separately (for implicit integration)
                      if getattr(self, 'return_friction_separately', False):
-                         # gamma_cuda is already clamped by kernel (20.0 tanh)
                          return gamma_cuda, friction
                          
                      gamma_cuda = gamma_cuda + friction * v
@@ -103,7 +84,6 @@ class LowRankChristoffel(nn.Module):
         except Exception:
             pass
     
-        # Fallback: Vectorized Implementation
         if v.dim() == 3 and self.U.dim() == 3:
             proj = torch.bmm(v, self.U) 
             norm = torch.norm(proj, dim=-1, keepdim=True)
@@ -117,21 +97,17 @@ class LowRankChristoffel(nn.Module):
             sq = (proj * proj) * scale
             gamma = torch.matmul(sq, self.W.t())
             
-        # APPLY THE CLUTCH (DYNAMIC FRICTION)
         if x is not None:
-            # Map to Periodic Space if needed
             if self.is_torus:
                  x_in = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
             else:
                  x_in = x
                  
-            # Base friction from state
             Wf = kwargs.get('W_forget_stack', None)
             Wi = kwargs.get('W_input_stack', None)
             bf = kwargs.get('b_forget_stack', None)
             
             if Wf is not None and bf is not None:
-                # Prioritize External Weights (The Clutch)
                 if Wf.dim() == 3: Wf = Wf[0] # Handle Depth head
                 if Wi is not None and Wi.dim() == 3: Wi = Wi[0]
                 if bf.dim() == 2: bf = bf[0]
@@ -140,23 +116,16 @@ class LowRankChristoffel(nn.Module):
                 if Wi is not None and force is not None:
                      gate_activ = gate_activ + torch.matmul(force, Wi.t())
             else:
-                # Use internal weights
                 gate_activ = self.forget_gate(x_in)
                 if force is not None:
                     gate_activ = gate_activ + self.input_gate(force)
                 
-            # LEVEL 25: FRICTION GAIN (Aristotelian Override)
-            # STABILITY FIX: Gain 5.0 is sufficient and more stable
             mu = torch.sigmoid(gate_activ) * 5.0
             
-            # If we want to return BOTH for implicit integration
             if getattr(self, 'return_friction_separately', False):
-                 # Match CUDA v5.1 Soft Clamping
                  gamma = 20.0 * torch.tanh(gamma / 20.0)
                  return gamma, mu
                  
             gamma = gamma + mu * v
             
-        # Match CUDA Kernel Soft Clamping (v5.1)
-        # force_out = 20.0f * tanhf(res / 20.0f)
         return 20.0 * torch.tanh(gamma / 20.0)

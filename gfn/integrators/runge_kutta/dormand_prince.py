@@ -1,9 +1,8 @@
 
 """
-Dormand-Prince (RK45) Adaptive Integrator.
+Dormand-Prince (RK45) integrator.
 
-Uses 5th order and 4th order approximations to estimate local error and adapt `dt`.
-Ideally suited for "Golden Integration" to ensure physical stability.
+Uses RK45 coefficients with a fixed step size.
 """
 import torch
 import torch.nn as nn
@@ -22,33 +21,28 @@ class DormandPrinceIntegrator(nn.Module):
     r"""
     Dormand-Prince (DP5) Integrator.
     
-    Implementation of the 5th-order solution from the RK45 (Dormand-Prince) tableau.
-    In this implementation, we use it as a high-precision Fixed-Step integrator,
-    utilizing the 5th-order approximation 'y5' for the update.
+    Uses the RK45 tableau and applies the 5th-order solution for updates.
     """
     def __init__(self, christoffel, dt=0.01):
         super().__init__()
         self.christoffel = christoffel
         self.base_dt = dt
         
-        # Butcher Tableau for RK45 (Dormand-Prince)
-        # c: nodes
+        # RK45 (Dormand-Prince) coefficients
         self.c = [0, 1/5, 3/10, 4/5, 8/9, 1, 1]
         
-        # a: Runge-Kutta matrix (flattened or manual for efficiency)
-        # b5: 5th order weights
-        # Coefficients (DP54)
+        # a-coefficients (DP54)
         self.a21 = 1/5
         self.a31, self.a32 = 3/40, 9/40
         self.a41, self.a42, self.a43 = 44/45, -56/15, 32/9
         self.a51, self.a52, self.a53, self.a54 = 19372/6561, -25360/2187, 64448/6561, -212/729
         self.a61, self.a62, self.a63, self.a64, self.a65 = 9017/3168, -355/33, 46732/5247, 49/176, -5103/18656
         
-        # b5: 5th order weights
+        # b5: 5th-order weights
         self.b5 = [35/384, 0, 500/1113, 125/192, -2187/6784, 11/84, 0]
         
     def forward(self, x, v, force=None, dt_scale=1.0, steps=1, collect_christ=False, **kwargs):
-        # Try Professional Fused CUDA Kernel
+        # Try fused CUDA kernel
         if CUDA_AVAILABLE and x.is_cuda and not collect_christ:
             try:
                 U = getattr(self.christoffel, 'U', None)
@@ -65,7 +59,7 @@ class DormandPrinceIntegrator(nn.Module):
 
         dt = self.base_dt * dt_scale
         
-        # Determine Topology
+        # Resolve topology
         topo_id = getattr(self.christoffel, 'topology_id', 0)
         if topo_id == 0 and hasattr(self.christoffel, 'is_torus') and self.christoffel.is_torus:
                 topo_id = 1
